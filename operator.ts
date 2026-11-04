@@ -15,6 +15,7 @@ export interface Element {
   bounds: [number, number, number, number]
   label: string
   editable: boolean
+  password: boolean
 }
 
 export interface Screen {
@@ -229,6 +230,7 @@ interface RawNode {
   viewId?: unknown
   clickable?: unknown
   editable?: unknown
+  password?: unknown
   bounds?: unknown
 }
 
@@ -252,7 +254,7 @@ export function readScreen(data: Record<string, unknown> | undefined): Screen {
     const description = typeof node.description === 'string' ? node.description.trim() : ''
     const viewId = typeof node.viewId === 'string' ? (node.viewId.split('/').pop() ?? '') : ''
     const label = clip(text || description || viewId, 60)
-    if (node.clickable === true || node.editable === true) {
+    if (node.clickable === true || node.editable === true || node.password === true) {
       const key = [left, top, right, bottom].map((n) => Math.round(n / 8)).join(',')
       if (seen.has(key) || elements.length >= MAX_ELEMENTS) continue
       seen.add(key)
@@ -260,7 +262,8 @@ export function readScreen(data: Record<string, unknown> | undefined): Screen {
         id: elements.length + 1,
         bounds: [left, top, right, bottom],
         label,
-        editable: node.editable === true,
+        editable: node.editable === true || node.password === true,
+        password: node.password === true,
       })
     } else if (label && (text || description) && texts.length < MAX_TEXTS) texts.push(clip(text || description, 80))
   }
@@ -461,7 +464,7 @@ function policyRules(goal: Goal) {
     .join('\n')
 }
 
-const describeAction = (action: Action, screen?: Screen) => {
+const describeAction = (action: Action, screen?: Screen, password = false) => {
   const target = (n?: number) => {
     const el = n ? screen?.elements[n - 1] : undefined
     return el ? ` [${el.id}]${el.label ? ` "${el.label}"` : ''}` : n ? ` [${n}]` : ''
@@ -478,7 +481,7 @@ const describeAction = (action: Action, screen?: Screen) => {
       return `${action.hold ? 'hold-drag' : 'drag'}${from} →${to}`
     }
     case 'type':
-      return `type${target(action.element)} "${clip(action.text, 40)}"${action.submit ? ' + enter' : ''}`
+      return `type${target(action.element)} "${password || (action.element && screen?.elements[action.element - 1]?.password) ? '••••' : clip(action.text, 40)}"${action.submit ? ' + enter' : ''}`
     case 'scroll':
       return `scroll ${action.direction} ${action.distance}`
     case 'open_app':
@@ -511,7 +514,7 @@ export function stepPrompt(
       : 'This is the first step.',
     `Current app: ${screen.packageName || 'unknown'}`,
     screen.elements.length
-      ? `Interactive elements:\n${screen.elements.map((e) => `[${e.id}] ${e.label ? `"${e.label}"` : '(no label)'}${e.editable ? ' (text field)' : ''}`).join('\n')}`
+      ? `Interactive elements:\n${screen.elements.map((e) => `[${e.id}] ${e.label ? `"${e.label}"` : '(no label)'}${e.password ? ' (password field)' : e.editable ? ' (text field)' : ''}`).join('\n')}`
       : 'No interactive elements were detected; use coordinates from the screenshot.',
     screen.texts.length ? `Other text on screen: ${screen.texts.join(' | ')}` : '',
     note,
@@ -755,6 +758,7 @@ export async function runOperator(goal: Goal, ports: OperatorPorts, signal: Abor
         break
       }
       let result = ''
+      let password = false
       const element = 'element' in action && action.element ? screen.elements[action.element - 1] : undefined
       /** 要点的位置命中了禁止的按钮时返回拦截说明 */
       const refuse = (p: { x: number; y: number } | null, targetElement: Element | null | undefined = element) => {
@@ -817,10 +821,17 @@ export async function runOperator(goal: Goal, ports: OperatorPorts, signal: Abor
                 ? `no element [${action.element}] on this screen`
                 : !element.editable
                   ? `element [${action.element}] is not editable; choose an editable field`
-                  : refuse(p) || (await act(humanTap(p, ports.random)))
+                  : element.password && !policy.allowed.includes('password')
+                    ? "blocked by the owner's settings (entering passwords is not allowed)"
+                    : refuse(p) || (await act(humanTap(p, ports.random)))
             if (result === 'OK') await ports.sleep(Math.round(between(ports.random, 350, 700)))
           }
-          if (result === 'OK') result = await act({ action: 'type', text: action.text })
+          if (result === 'OK') {
+            password = policy.allowed.includes('password') && (!action.element || element?.password === true)
+            result = await act({ action: 'type', text: action.text, ...(password ? { password: true } : {}) })
+            if (result === 'NO_EDITABLE_FOCUS' && element?.password && password)
+              result = 'could not type into the password field (the companion app may need updating to 0.5.4)'
+          }
           // 不允许发送时，回车只用于搜索框：聊天框里按回车就是发送
           const searching = !!element && SEARCH_WORDS.some((w) => norm(element.label).includes(norm(w)))
           if (result === 'OK' && action.submit && !policy.allowed.includes('post') && !searching)
@@ -870,7 +881,7 @@ export async function runOperator(goal: Goal, ports: OperatorPorts, signal: Abor
           result = 'OK'
           break
       }
-      record(decision.thought, describeAction(action, screen), result)
+      record(decision.thought, describeAction(action, screen, password), result)
       if (result === 'OUTCOME_UNKNOWN' || result === 'DEVICE_OFFLINE') {
         if (++failures >= MAX_FAILURES) {
           endReason = 'error'

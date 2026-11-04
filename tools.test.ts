@@ -248,3 +248,30 @@ test('phone_control 开启后把解析的 drag 指令放进队列', async () => 
     expect((await pending).content).toBe('{"ok":true,"code":"OK"}')
   }
 })
+
+test('phone_control 按调用时的密码权限过滤标记，只有明确 true 才传下去', async () => {
+  const ctx = context({ directTool: true })
+  const direct = tool(ctx, 'phone_control')!
+  expect(direct.parameters).toMatchObject({ properties: { password: { type: 'boolean' } } })
+  expect(direct.description).toContain(
+    'password: true lets type fill a password field, only when the owner allows it in the settings.',
+  )
+  const bridge = new Bridge(ctx.storage)
+  const pair = bridge.pair()
+  bridge.poll(pair.deviceId, true)
+  for (const allowPassword of [false, true]) {
+    ctx.settings.allowPassword = allowPassword
+    for (const password of [undefined, true, false, 'true', null]) {
+      const pending = direct.run({ action: 'type', text: 'secret', password }, toolCtx(ctx))
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      const job = bridge.poll(pair.deviceId, true)
+      expect(job?.command).toEqual({
+        action: 'type',
+        text: 'secret',
+        ...(allowPassword && password === true ? { password: true } : {}),
+      })
+      bridge.finish(pair.deviceId, job?.id ?? '', { ok: true, code: 'OK' })
+      expect((await pending).content).toBe('{"ok":true,"code":"OK"}')
+    }
+  }
+})

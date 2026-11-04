@@ -94,12 +94,12 @@ Content-Type: application/json
 
 | action | 额外字段 | 说明 |
 | --- | --- | --- |
-| `observe` | 无 | 界面节点 + 截图，无法截图时返回明确错误 |
+| `observe` | 无 | 界面节点 + 截图，无法截图时返回明确错误；密码框节点可能带 `password: true`，其 `text` 永远为空，不回传框内文字 |
 | `tap` | x, y, duration? | 坐标 0–1；duration 按下毫秒 40–400，默认 80 |
 | `longpress` | x, y, duration? | duration 400–2000，默认 700（App 0.5.0 起） |
 | `swipe` | x, y, endX, endY, duration?, points? | 坐标 0–1；duration 整数毫秒 100–2000，默认 500；points 是最多 16 个途经点 `[x, y]`，旧版 App 忽略、走直线 |
 | `drag` | x, y, endX, endY, hold?, duration?, rest?, points? | 拖动（App 0.5.1 起）；坐标 0–1；hold 整数毫秒 0–2000，默认 0；duration 整数毫秒 100–3000，默认 600；rest 整数毫秒 0–1000，默认 150；points 最多 16 个 `[x, y]`，每个分量 0–1；按下、原地按住、沿途经点移动、终点停留后抬起 |
-| `type` | text | 1–2000 字符，替换聚焦可编辑输入框文字 |
+| `type` | text, password? | 1–2000 字符，替换聚焦可编辑输入框文字；App 0.5.4 起，`password: true` 允许填密码框 |
 | `open` | packageName | Android 包名，最长 200 字符 |
 | `enter` | 无 | 对聚焦输入框按输入法的回车 / 搜索 / 发送（App 0.5.0 起） |
 | `apps` | 无 | 返回 `data.apps: [{ label, packageName }]`，桌面上能打开的应用，最多 300 个（App 0.5.0 起） |

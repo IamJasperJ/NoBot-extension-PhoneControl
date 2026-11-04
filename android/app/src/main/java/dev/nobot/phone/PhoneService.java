@@ -335,7 +335,10 @@ public class PhoneService extends AccessibilityService {
           String text = command.getString("text");
           if (text.isEmpty() || text.length() > 2000) throw new IllegalArgumentException();
           AccessibilityNodeInfo node = findFocus(AccessibilityNodeInfo.FOCUS_INPUT);
-          if (node == null || !node.isEditable() || node.isPassword()) { future.complete(result(false, "NO_EDITABLE_FOCUS")); return; }
+          // 密码框只在服务端明确带 password:true 时才填（主人在插件设置里放开了「允许输入密码」）
+          if (node == null || !node.isEditable() || (node.isPassword() && !command.optBoolean("password", false))) {
+            future.complete(result(false, "NO_EDITABLE_FOCUS")); return;
+          }
           Bundle args = new Bundle();
           args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text);
           boolean success = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args);
@@ -479,13 +482,20 @@ public class PhoneService extends AccessibilityService {
   }
 
   private void collect(AccessibilityNodeInfo node, JSONArray nodes, int depth, int[] visited) throws Exception {
-    if (++visited[0] > 400 || depth > 20 || nodes.length() >= 100 || node.isPassword()) return;
+    if (++visited[0] > 400 || depth > 20 || nodes.length() >= 100) return;
+    if (node.isPassword() && !node.isVisibleToUser()) return;
     if (node.isVisibleToUser()) {
       Rect bounds = new Rect();
       node.getBoundsInScreen(bounds);
-      nodes.put(new JSONObject().put("text", limited(node.getText())).put("description", limited(node.getContentDescription()))
+      // 密码框照样回报位置，让操作员知道在哪里输入，但永远不回传框里的内容
+      boolean password = node.isPassword();
+      JSONObject item = new JSONObject().put("text", password ? "" : limited(node.getText())).put("description", limited(node.getContentDescription()))
         .put("viewId", limited(node.getViewIdResourceName())).put("clickable", node.isClickable()).put("editable", node.isEditable())
-        .put("bounds", new JSONArray(new int[]{bounds.left, bounds.top, bounds.right, bounds.bottom})));
+        .put("bounds", new JSONArray(new int[]{bounds.left, bounds.top, bounds.right, bounds.bottom}));
+      if (password) item.put("password", true);
+      nodes.put(item);
+      // 密码框的子节点可能带着明文（部分输入法 / 自绘控件），不再往下找
+      if (password) return;
     }
     for (int i = 0; i < node.getChildCount() && visited[0] < 400 && nodes.length() < 100; i++) {
       AccessibilityNodeInfo child = node.getChild(i);

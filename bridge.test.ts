@@ -265,3 +265,14 @@ describe('拖动协议', () => {
     expect(() => parseCommand({ ...base, action: 'swipe', points: [[0, 2]] })).toThrow('INVALID_INPUT')
   })
 })
+
+test('type 密码标记只接受缺省或 true', () => {
+  expect(parseCommand({ action: 'type', text: 'secret' })).toEqual({ action: 'type', text: 'secret' })
+  expect(parseCommand({ action: 'type', text: 'secret', password: true })).toEqual({
+    action: 'type',
+    text: 'secret',
+    password: true,
+  })
+  for (const password of [false, null, 0, 1, '', 'true', [], {}])
+    expect(() => parseCommand({ action: 'type', text: 'secret', password })).toThrow('INVALID_INPUT')
+})

@@ -14,6 +14,7 @@ import {
   readScreen,
   runOperator,
   STRICT_POLICY,
+  stepPrompt,
   systemPrompt,
 } from './operator'
 import type { Command, Result } from './protocol'
@@ -551,5 +552,99 @@ describe('拖动', () => {
       'drag is not supported by this companion app version (needs 0.5.1); try another way',
     ])
     expect(f.commands.filter((c) => c.action === 'drag')).toHaveLength(1)
+  })
+})
+
+describe('密码框输入', () => {
+  const passwordScreen = () => ({
+    width: 1000,
+    height: 2000,
+    packageName: 'com.example',
+    nodes: [
+      { text: '', description: 'Password', password: true, bounds: [0, 100, 900, 200] },
+      { text: '搜索', editable: true, bounds: [0, 300, 900, 400] },
+      { text: '删除', password: true, bounds: [0, 500, 900, 600] },
+    ],
+  })
+  test('密码框即使没有 editable 和 clickable 也编号，提示显示密码框', () => {
+    const screen = readScreen(passwordScreen())
+    expect(screen.elements[0]).toMatchObject({ id: 1, label: 'Password', password: true, editable: true })
+    expect(screen.elements[1]).toMatchObject({ password: false, editable: true })
+    const prompt = stepPrompt(goal(), screen, [], { steps: 3, minutes: 1 })
+    expect(prompt).toContain('[1] "Password" (password field)')
+    expect(prompt).not.toContain('[1] "Password" (text field)')
+    expect(prompt).toContain('[2] "搜索" (text field)')
+    expect(readScreen({ nodes: [{ password: 'true', bounds: [0, 0, 100, 100] }] }).elements).toEqual([])
+  })
+
+  for (const allowed of [false, true]) {
+    test(`密码权限${allowed ? '开启' : '关闭'}：指定密码框、当前焦点和普通框的指令与记录`, async () => {
+      const secret = 'secret-must-not-appear'
+      const f = ports(
+        [1, undefined, 2, 3].map((element) =>
+          JSON.stringify({ action: { type: 'type', element, text: element === 2 ? '猫' : secret } }),
+        ),
+      )
+      const inner = f.p.act
+      f.p.act = async (command) => {
+        if (command.action !== 'observe') return inner(command)
+        f.commands.push(command)
+        return { ok: true, code: 'OK', data: passwordScreen() }
+      }
+      const report = await runOperator(
+        goal({ policy: { allowed: allowed ? ['password'] : [], blockedApps: [], blockedWords: [] } }),
+        f.p,
+        new AbortController().signal,
+      )
+      expect(report.steps[0]?.result).toStartWith(
+        allowed ? 'OK' : "blocked by the owner's settings (entering passwords is not allowed)",
+      )
+      expect(report.steps[0]?.action).toBe('type [1] "Password" "••••"')
+      expect(report.steps[1]?.action).toBe(allowed ? 'type "••••"' : `type "${secret}"`)
+      expect(report.steps[2]?.action).toBe('type [2] "搜索" "猫"')
+      const acted = f.commands.filter((c) => c.action !== 'observe')
+      expect(acted.map((c) => c.action)).toEqual(
+        allowed ? ['tap', 'type', 'type', 'tap', 'type'] : ['type', 'tap', 'type'],
+      )
+      for (const command of acted.filter((c) => c.action === 'type'))
+        expect(command).toEqual({
+          action: 'type',
+          text: command.text === '猫' ? '猫' : secret,
+          ...(allowed && command.text !== '猫' ? { password: true } : {}),
+        })
+      // 密码权限不能绕过原有的受限文字检查。
+      expect(report.steps[3]?.result).toBe(
+        allowed
+          ? 'blocked by the owner\'s settings ("删除")'
+          : "blocked by the owner's settings (entering passwords is not allowed)",
+      )
+      if (allowed) {
+        expect(JSON.stringify(report.steps)).not.toContain(secret)
+        expect(f.prompts.join('\n')).not.toContain(secret)
+      }
+    })
+  }
+
+  test('旧 App 的密码框输入失败改写提示；普通框和未知焦点保留原错误', async () => {
+    const f = ports(
+      [1, 2, undefined].map((element) =>
+        JSON.stringify({ action: { type: 'type', element, text: element === 2 ? '猫' : 'secret' } }),
+      ),
+      (command) => (command.action === 'type' ? { ok: false, code: 'NO_EDITABLE_FOCUS' } : { ok: true, code: 'OK' }),
+    )
+    const inner = f.p.act
+    f.p.act = async (command) =>
+      command.action === 'observe' ? { ok: true, code: 'OK', data: passwordScreen() } : inner(command)
+    const report = await runOperator(
+      goal({ policy: { allowed: ['password'], blockedApps: [], blockedWords: [] } }),
+      f.p,
+      new AbortController().signal,
+    )
+    expect(report.steps.slice(0, 3).map((s) => s.result)).toEqual([
+      'could not type into the password field (the companion app may need updating to 0.5.4)',
+      'NO_EDITABLE_FOCUS',
+      'NO_EDITABLE_FOCUS',
+    ])
+    expect(JSON.stringify(report.steps)).not.toContain('secret')
   })
 })

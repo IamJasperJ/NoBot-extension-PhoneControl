@@ -19,7 +19,7 @@ export type Command =
       rest: number
       points?: [number, number][]
     }
-  | { action: 'type'; text: string }
+  | { action: 'type'; text: string; password?: true }
   | { action: 'open'; packageName: string }
 
 export function object(value: unknown): Record<string, unknown> {
@@ -87,7 +87,8 @@ export function parseCommand(value: unknown): Command {
     }
     case 'type':
       if (typeof v.text !== 'string' || !v.text.length || v.text.length > 2000) throw new Error('INVALID_INPUT')
-      return { action: 'type', text: v.text }
+      if (v.password !== undefined && v.password !== true) throw new Error('INVALID_INPUT')
+      return v.password === true ? { action: 'type', text: v.text, password: true } : { action: 'type', text: v.text }
     case 'open':
       if (
         typeof v.packageName !== 'string' ||
