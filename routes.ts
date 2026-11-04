@@ -1,9 +1,11 @@
 import { existsSync } from 'node:fs'
 import { networkInterfaces } from 'node:os'
 import type { Context, Hono } from '../../apps/server/node_modules/hono'
-import type { ExtensionStorage } from '../../apps/server/src/extensions/types'
+import type { ExtensionContext, ExtensionStorage } from '../../apps/server/src/extensions/types'
 import { Bridge } from './bridge'
+import { connections } from './host'
 import { object, parseCommand, parseResult } from './protocol'
+import { currentTask, recentMemories, settingsOf, stopTask } from './tasks'
 
 /** 限制实际读取字节，不信任客户端声明的 Content-Length。 */
 async function body(c: Context, limit = 16_384) {
@@ -46,6 +48,35 @@ export function localAddresses(interfaces = networkInterfaces(), inDocker = exis
 }
 
 type Translate = (key: string) => string
+
+/** 操作员任务的查看 / 停止，以及设置表单的连接、模型候选 */
+export function registerTaskRoutes(app: Hono, ctx: Omit<ExtensionContext, 'chatId'>, t: Translate) {
+  app.get('/task', (c) => c.json({ task: currentTask(ctx.storage), memories: recentMemories(ctx.storage) }))
+  app.post('/task/stop', (c) => {
+    stopTask(ctx.storage)
+    return c.json({ ok: true })
+  })
+  app.post('/connections', async (c) =>
+    c.json({
+      options: [
+        { value: '', label: t('跟随会话') },
+        ...(await connections())
+          .listApiPresets()
+          .map((v) => ({ value: v.id, label: v.vision === 'no' ? `${v.name} (${t('不支持看图')})` : v.name })),
+      ],
+    }),
+  )
+  app.post('/models', async (c) => {
+    const body = await c.req
+      .json<{ settings?: Record<string, unknown> }>()
+      .catch(() => ({}) as { settings?: Record<string, unknown> })
+    const s = settingsOf({ ...ctx.settings, ...(body.settings ?? {}) })
+    const host = await connections()
+    const id = s.operatorConnectionId || host.listApiPresets().find((v) => v.isDefault)?.id
+    const models = id ? (await host.connectionModels(id).catch(() => ({ models: [] }))).models : []
+    return c.json({ options: models.map((value) => ({ value, label: value })) })
+  })
+}
 export function registerRoutes(app: Hono, storage: ExtensionStorage, t: Translate, deviceRoutes = false) {
   const bridge = new Bridge(storage)
   // 宿主会覆盖子路由 onError，因此在处理函数内捕获协议错误。

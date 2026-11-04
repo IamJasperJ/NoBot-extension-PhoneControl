@@ -1,7 +1,9 @@
 export type Command =
-  | { action: 'observe' | 'back' | 'home' | 'recents' }
-  | { action: 'tap'; x: number; y: number }
-  | { action: 'swipe'; x: number; y: number; endX: number; endY: number; duration: number }
+  | { action: 'observe' | 'back' | 'home' | 'recents' | 'enter' | 'apps' }
+  | { action: 'tap'; x: number; y: number; duration?: number }
+  | { action: 'longpress'; x: number; y: number; duration: number }
+  /** points：起点和终点之间的途经点（0–1），用来画出带弧度的拟人手势；旧版 App 忽略它、走直线 */
+  | { action: 'swipe'; x: number; y: number; endX: number; endY: number; duration: number; points?: [number, number][] }
   | { action: 'type'; text: string }
   | { action: 'open'; packageName: string }
 
@@ -12,9 +14,15 @@ export function object(value: unknown): Record<string, unknown> {
 
 export function parseCommand(value: unknown): Command {
   const v = object(value)
-  const coordinate = (key: string) => {
-    const n = v[key]
+  const unit = (n: unknown) => {
     if (typeof n !== 'number' || !Number.isFinite(n) || n < 0 || n > 1) throw new Error('INVALID_INPUT')
+    return n
+  }
+  const coordinate = (key: string) => unit(v[key])
+  /** 毫秒整数，缺省取 fallback */
+  const duration = (min: number, max: number, fallback: number) => {
+    const n = v.duration ?? fallback
+    if (typeof n !== 'number' || !Number.isInteger(n) || n < min || n > max) throw new Error('INVALID_INPUT')
     return n
   }
   switch (v.action) {
@@ -22,21 +30,31 @@ export function parseCommand(value: unknown): Command {
     case 'back':
     case 'home':
     case 'recents':
+    case 'enter':
+    case 'apps':
       return { action: v.action }
     case 'tap':
-      return { action: 'tap', x: coordinate('x'), y: coordinate('y') }
+      return v.duration === undefined
+        ? { action: 'tap', x: coordinate('x'), y: coordinate('y') }
+        : { action: 'tap', x: coordinate('x'), y: coordinate('y'), duration: duration(40, 400, 80) }
+    case 'longpress':
+      return { action: 'longpress', x: coordinate('x'), y: coordinate('y'), duration: duration(400, 2000, 700) }
     case 'swipe': {
-      const duration = v.duration ?? 500
-      if (typeof duration !== 'number' || !Number.isInteger(duration) || duration < 100 || duration > 2000)
-        throw new Error('INVALID_INPUT')
-      return {
+      const command: Command = {
         action: 'swipe',
         x: coordinate('x'),
         y: coordinate('y'),
         endX: coordinate('endX'),
         endY: coordinate('endY'),
-        duration,
+        duration: duration(100, 2000, 500),
       }
+      if (v.points === undefined) return command
+      if (!Array.isArray(v.points) || v.points.length > 16) throw new Error('INVALID_INPUT')
+      const points = v.points.map((point): [number, number] => {
+        if (!Array.isArray(point) || point.length !== 2) throw new Error('INVALID_INPUT')
+        return [unit(point[0]), unit(point[1])]
+      })
+      return { ...command, points }
     }
     case 'type':
       if (typeof v.text !== 'string' || !v.text.length || v.text.length > 2000) throw new Error('INVALID_INPUT')

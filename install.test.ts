@@ -38,6 +38,11 @@ test('安装后的插件经过真实宿主完成配对与手机回报', async ()
     'routes.ts',
     'tools.ts',
     'i18n.ts',
+    'host.ts',
+    'commands.ts',
+    'operator.ts',
+    'marks.ts',
+    'tasks.ts',
   ])
     await copyFile(join(import.meta.dir, name), join(destination, name))
   await (await import('../../apps/server/src/bootstrap')).bootstrap()
