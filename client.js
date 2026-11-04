@@ -13,6 +13,15 @@ export const en = {
   正在读取: 'Loading',
   状态读取失败: 'Unable to read status',
   刷新: 'Refresh',
+  最近断线: 'Recent disconnects',
+  'App 被系统冻结': 'App frozen by the system',
+  网络连不上服务器: 'Could not reach the server',
+  'App 或无障碍服务重启过': 'App or accessibility service restarted',
+  手动暂停: 'Paused manually',
+  原因未知: 'Unknown cause',
+  '{minutes} 分钟': '{minutes} min',
+  '经常显示「被系统冻结」时，在手机设置里允许 NoBot Phone 后台高耗电、自启动，并在多任务里锁定它。':
+    'If it is often frozen by the system, allow NoBot Phone to run in the background without restrictions and auto-start, and lock it in recent apps.',
   生成配对信息: 'Generate pairing code',
   重新配对: 'Pair again',
   撤销授权: 'Revoke access',
@@ -861,6 +870,56 @@ export default function activate(api) {
   }
 
   /** @param {{state:State, onRefresh:()=>void, onConfirm:(action:'pair'|'revoke')=>void}} props */
+  /** 断线原因（App 0.5.5 起上报；旧版 App 只有服务端看到的间隔，原因未知） */
+  const CAUSES = /** @type {Record<string,string>} */ ({
+    frozen: 'App 被系统冻结',
+    network: '网络连不上服务器',
+    restarted: 'App 或无障碍服务重启过',
+    paused: '手动暂停',
+    unknown: '原因未知',
+  })
+
+  /** 最近断线：恢复时间 · 断了多久（服务端看到的间隔）· 原因 */
+  function Disconnects({ list }) {
+    const frozen = list.some((d) => d.cause === 'frozen')
+    return h(
+      'div',
+      { className: 'pc-section' },
+      h('div', { className: 'pc-label' }, t('最近断线')),
+      h(
+        'ol',
+        { className: 'pc-log' },
+        ...list.map((d) =>
+          h(
+            'li',
+            { key: d.at, className: 'pc-log-item' },
+            h(
+              'div',
+              null,
+              h(
+                'div',
+                { className: 'pc-log-action' },
+                `${new Date(d.at).toLocaleString()} · ${t('{minutes} 分钟', { minutes: Math.max(1, Math.round(d.gapMs / 60000)) })}`,
+              ),
+              h(
+                'div',
+                { className: 'pc-log-thought' },
+                [t(CAUSES[d.cause] ?? '原因未知'), d.error].filter(Boolean).join(' · '),
+              ),
+            ),
+          ),
+        ),
+      ),
+      frozen
+        ? h(
+            'p',
+            { className: 'pc-muted' },
+            t('经常显示「被系统冻结」时，在手机设置里允许 NoBot Phone 后台高耗电、自启动，并在多任务里锁定它。'),
+          )
+        : null,
+    )
+  }
+
   function StatusCard({ state, onRefresh, onConfirm }) {
     const [confirm, setConfirm] = useState(/** @type {'pair'|'revoke'|null} */ (null))
     const status = state.status
@@ -888,6 +947,7 @@ export default function activate(api) {
           h('dd', { key: `${label}-d` }, value),
         ]),
       ),
+      status?.disconnects?.length ? h(Disconnects, { list: status.disconnects }) : null,
       status?.paired
         ? confirm
           ? h(

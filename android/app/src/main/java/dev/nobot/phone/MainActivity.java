@@ -42,7 +42,7 @@ import rikka.shizuku.Shizuku;
 public class MainActivity extends Activity {
   private SharedPreferences prefs;
   private EditText url, device, token;
-  private TextView status, server, panelStatus, shizukuStatus;
+  private TextView status, server, panelStatus, shizukuStatus, outages;
   private Button toggle;
   private View manual, panelSection;
   /** 准备工作清单里的状态行，每秒刷新 */
@@ -161,6 +161,13 @@ public class MainActivity extends Activity {
     panel.setVisibility("panel".equals(prefs.getString("mode", "wake")) ? View.VISIBLE : View.GONE);
     screen.addView(panel);
 
+    // 最近断线：恢复后由 PhoneService 记下的时间、时长和原因，帮主人判断是被系统冻结还是网络问题
+    LinearLayout history = card(page);
+    history.addView(heading(R.string.section_outages));
+    outages = text(0, 14, R.color.text);
+    history.addView(outages);
+    history.addView(text(R.string.outages_hint, 13, R.color.muted), margins(0, dp(10), 0, 0));
+
     page.addView(text(R.string.disclosure, 12, R.color.muted), margins(dp(4), dp(4), dp(4), 0));
     Shizuku.addRequestPermissionResultListener(shizukuResult);
     ScrollView scroll = new ScrollView(this);
@@ -190,6 +197,33 @@ public class MainActivity extends Activity {
       notifications.set(checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED, R.string.state_allowed, R.string.state_denied);
     panelStatus.setText(prefs.getInt("panelStatus", R.string.panel_idle));
     shizukuStatus.setText(shizukuState());
+    outages.setText(outageText(prefs.getString("outages", "[]")));
+  }
+
+  /** 最近断线，最新的在上面：「11-05 01:25 · 6 分钟 · 被系统冻结」 */
+  private String outageText(String json) {
+    StringBuilder out = new StringBuilder();
+    try {
+      org.json.JSONArray list = new org.json.JSONArray(json);
+      java.text.SimpleDateFormat format = new java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.getDefault());
+      for (int i = list.length() - 1; i >= 0; i--) {
+        org.json.JSONObject item = list.getJSONObject(i);
+        long minutes = Math.max(1, Math.round(item.getLong("offlineMs") / 60000.0));
+        if (out.length() > 0) out.append('\n');
+        out.append(getString(R.string.outage_line, format.format(new java.util.Date(item.getLong("at"))), minutes, getString(causeText(item.optString("cause")))));
+      }
+    } catch (Exception ignored) {}
+    return out.length() == 0 ? getString(R.string.outages_none) : out.toString();
+  }
+
+  private static int causeText(String cause) {
+    switch (cause) {
+      case "frozen": return R.string.cause_frozen;
+      case "network": return R.string.cause_network;
+      case "restarted": return R.string.cause_restarted;
+      case "paused": return R.string.cause_paused;
+      default: return R.string.cause_unknown;
+    }
   }
 
   /** 状态文字的颜色：已连接绿、连接中黄、出错红、暂停灰 */

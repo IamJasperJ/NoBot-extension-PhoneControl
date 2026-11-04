@@ -1,6 +1,38 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import type { ExtensionStorage } from '../../apps/server/src/extensions/types'
 import type { Command, Result } from './protocol'
+import { object } from './protocol'
+
+export type DisconnectCause = 'frozen' | 'network' | 'restarted' | 'paused' | 'unknown'
+
+/** 一次断线：服务端从上次轮询到这次轮询的间隔，加上 App 报告的原因 */
+export interface Disconnect {
+  /** 恢复（这次轮询）的时间 */
+  at: number
+  /** 服务端看到的间隔：这次轮询 - 上次轮询 */
+  gapMs: number
+  cause: DisconnectCause
+  /** App 自己估计的断线时长（旧版 App 没有） */
+  appOfflineMs?: number
+  error?: string
+}
+
+export function parseResumed(
+  value: unknown,
+): { offlineMs: number; cause: Exclude<DisconnectCause, 'unknown'>; error?: string } | undefined {
+  if (value === undefined) return undefined
+  const v = object(value)
+  if (
+    typeof v.offlineMs !== 'number' ||
+    !Number.isInteger(v.offlineMs) ||
+    v.offlineMs < 0 ||
+    v.offlineMs > 604_800_000 ||
+    (v.cause !== 'frozen' && v.cause !== 'network' && v.cause !== 'restarted' && v.cause !== 'paused') ||
+    (v.error !== undefined && typeof v.error !== 'string')
+  )
+    throw new Error('INVALID_INPUT')
+  return { offlineMs: v.offlineMs, cause: v.cause, ...(v.error === undefined ? {} : { error: v.error.slice(0, 200) }) }
+}
 
 interface Device {
   id: string
@@ -36,6 +68,7 @@ export class Bridge {
   revoke() {
     this.storage.delete('device')
     this.storage.delete('job')
+    this.storage.delete('disconnects')
   }
 
   authenticate(id: string, token: string) {
@@ -53,16 +86,32 @@ export class Bridge {
       online: !!device && device.lastSeen > 0 && this.now() - device.lastSeen < 15_000,
       ready: device?.ready ?? false,
       lastSeen: device?.lastSeen ?? null,
+      disconnects: this.disconnects().slice(-10).reverse(),
       job: job
         ? { id: job.id, state: job.expiresAt <= this.now() && job.state !== 'done' ? 'expired' : job.state }
         : null,
     }
   }
 
-  poll(id: string, ready: boolean) {
+  disconnects(): Disconnect[] {
+    return this.storage.get<Disconnect[]>('disconnects') ?? []
+  }
+
+  poll(id: string, ready: boolean, resumed?: NonNullable<ReturnType<typeof parseResumed>>) {
     const device = this.storage.get<Device>('device')
     if (!device || device.id !== id) throw new Error('UNAUTHORIZED')
-    this.storage.set('device', { ...device, lastSeen: this.now(), ready })
+    const at = this.now()
+    const gapMs = at - device.lastSeen
+    if ((device.lastSeen > 0 && gapMs > 30_000) || resumed) {
+      const disconnect: Disconnect = {
+        at,
+        gapMs,
+        cause: resumed?.cause ?? 'unknown',
+        ...(resumed ? { appOfflineMs: resumed.offlineMs, error: resumed.error } : {}),
+      }
+      this.storage.set('disconnects', [...this.disconnects(), disconnect].slice(-30))
+    }
+    this.storage.set('device', { ...device, lastSeen: at, ready })
     const job = this.storage.get<Job>('job')
     if (!ready || !job || job.deviceId !== id || job.state !== 'queued' || job.expiresAt <= this.now()) return null
     // 交付即锁定，响应丢失也不重新派发，避免真实设备重复发送或点击。

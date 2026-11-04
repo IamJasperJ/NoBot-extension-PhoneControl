@@ -55,6 +55,10 @@ public class PhoneService extends AccessibilityService {
   /** 特权调用会阻塞（Root 首次授权要等用户点），放到单独线程 */
   private final ExecutorService panelWorker = Executors.newSingleThreadExecutor();
   private long lastAction;
+  /** 前台服务和看门狗是否已经开着（只在状态变化时启停） */
+  private boolean keepingAlive;
+  /** 当前这次断线的开始时间和原因，恢复后报给服务端 */
+  private final Outage outage = new Outage();
   private static final long RELOCK_DELAY = 30000;
   private final Runnable relock = () -> {
     if (!wokeScreen) return;
@@ -77,20 +81,45 @@ public class PhoneService extends AccessibilityService {
     screen = power.newWakeLock(PowerManager.SCREEN_DIM_WAKE_LOCK, "nobot:screen");
     screen.setReferenceCounted(false);
     NotificationManager manager = getSystemService(NotificationManager.class);
-    manager.createNotificationChannel(new NotificationChannel("control", getString(R.string.app_name), NotificationManager.IMPORTANCE_LOW));
+    manager.createNotificationChannel(new NotificationChannel(KeepAliveService.CHANNEL, getString(R.string.app_name), NotificationManager.IMPORTANCE_LOW));
+    // 上次在线后服务重启过（进程被杀、无障碍被系统关掉再打开等）：等主人重新开始后把这段一起报上去
+    long lastOnline = prefs.getLong("lastOnline", 0);
+    if (lastOnline > 0) outage.restarted(SystemClock.elapsedRealtime(), System.currentTimeMillis() - lastOnline);
     running = true;
     worker.execute(this::loop);
   }
 
   private boolean enabled() { return running && prefs.getBoolean("enabled", false); }
+  boolean controlling() { return enabled(); }
   private void status(int id) { prefs.edit().putInt("status", id).apply(); }
+  /** 控制开启时起前台服务（常驻通知）和看门狗闹钟，暂停时都收起来 */
   private void notification(boolean active) {
-    NotificationManager manager = getSystemService(NotificationManager.class);
-    if (!active) { manager.cancel(1); return; }
-    PendingIntent open = PendingIntent.getActivity(this, 0, new Intent(this, MainActivity.class), PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
-    manager.notify(1, new Notification.Builder(this, "control").setSmallIcon(android.R.drawable.ic_menu_view)
-      .setContentTitle(getString(R.string.app_name)).setContentText(getString(R.string.active))
-      .setContentIntent(open).setOngoing(true).build());
+    if (active == keepingAlive) return;
+    keepingAlive = active;
+    if (active) {
+      KeepAliveService.start(this);
+      Watchdog.schedule(this);
+    } else {
+      KeepAliveService.stop(this);
+      Watchdog.cancel(this);
+      getSystemService(NotificationManager.class).cancel(KeepAliveService.ID);
+    }
+  }
+
+  /** 前台服务起不来时的退路：只发一条普通常驻通知 */
+  static void fallbackNotification(android.content.Context context) {
+    context.getSystemService(NotificationManager.class).notify(KeepAliveService.ID, KeepAliveService.build(context));
+  }
+
+  /** 恢复后把这次断线记进本地最近记录（主页显示，最多 10 条） */
+  private void remember(Outage.Report report) {
+    try {
+      JSONArray list = new JSONArray(prefs.getString("outages", "[]"));
+      list.put(new JSONObject().put("at", System.currentTimeMillis()).put("offlineMs", report.offlineMs).put("cause", report.cause).put("error", report.error));
+      JSONArray kept = new JSONArray();
+      for (int i = Math.max(0, list.length() - 10); i < list.length(); i++) kept.put(list.get(i));
+      prefs.edit().putString("outages", kept.toString()).apply();
+    } catch (Exception ignored) {}
   }
 
   private void loop() {
@@ -100,10 +129,11 @@ public class PhoneService extends AccessibilityService {
     int failures = 0;
     while (running) {
       try {
+        outage.tick(SystemClock.elapsedRealtime());
         notification(enabled());
         awake(enabled());
         maintainPanel();
-        if (!enabled()) { pending = null; Thread.sleep(500); continue; }
+        if (!enabled()) { pending = null; outage.paused(SystemClock.elapsedRealtime()); Thread.sleep(500); continue; }
         long epoch = prefs.getLong("epoch", 0);
         String base = prefs.getString("url", "");
         String token = prefs.getString("token", "");
@@ -114,7 +144,19 @@ public class PhoneService extends AccessibilityService {
           pending = null;
         }
         long pollStarted = SystemClock.elapsedRealtime();
-        JSONObject response = request(base + "/poll", token, device, new JSONObject().put("protocol", 1).put("ready", true));
+        JSONObject body = new JSONObject().put("protocol", 1).put("ready", true);
+        // 断线够长就把原因带上；这次轮询失败时再放回去，下次成功时重报
+        Outage.Report report = outage.succeeded(SystemClock.elapsedRealtime());
+        if (report != null) body.put("resumed", new JSONObject().put("offlineMs", Math.min(report.offlineMs, 604800000L))
+          .put("cause", report.cause).put("error", report.error));
+        JSONObject response;
+        try { response = request(base + "/poll", token, device, body); }
+        catch (Exception e) {
+          if (report != null) outage.restore(SystemClock.elapsedRealtime() - report.offlineMs, report.cause, report.error);
+          throw e;
+        }
+        if (report != null) remember(report);
+        prefs.edit().putLong("lastOnline", System.currentTimeMillis()).apply();
         if (enabled()) status(R.string.connected);
         failures = 0;
         JSONObject job = response.optJSONObject("job");
@@ -158,7 +200,10 @@ public class PhoneService extends AccessibilityService {
         prefs.edit().putBoolean("enabled", false).apply();
         status(R.string.public_http);
       } catch (Exception e) {
-        if (enabled()) status(R.string.network_error);
+        if (enabled()) {
+          status(R.string.network_error);
+          outage.failed(SystemClock.elapsedRealtime(), e.getClass().getSimpleName() + (e.getMessage() == null ? "" : ": " + e.getMessage()));
+        }
         try { Thread.sleep(Math.min(15000, 1000L << Math.min(4, failures++))); }
         catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); break; }
       }
@@ -166,6 +211,7 @@ public class PhoneService extends AccessibilityService {
     notification(false);
     awake(false);
   }
+
 
   private boolean panelMode() { return "panel".equals(prefs.getString("mode", "wake")); }
 

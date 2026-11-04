@@ -79,4 +79,13 @@
   <string name="state_allowed">已允许</string>
   <string name="state_denied">未允许，控制期间不显示提示</string>
   <string name="privilege_title">权限来源</string>
+  <string name="section_outages">最近断线</string>
+  <string name="outages_none">还没有断线记录</string>
+  <string name="outage_line">%1$s · %2$d 分钟 · %3$s</string>
+  <string name="cause_frozen">App 被系统冻结</string>
+  <string name="cause_network">网络连不上服务器</string>
+  <string name="cause_restarted">App 或无障碍服务重启过</string>
+  <string name="cause_paused">手动暂停</string>
+  <string name="cause_unknown">原因未知</string>
+  <string name="outages_hint">经常显示「被系统冻结」：在系统设置里允许本 App 后台高耗电、自启动，并在多任务里锁定它。「网络连不上」：检查 EasyTier / VPN 是否也被省电策略关掉了。</string>
 </resources>

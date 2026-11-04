@@ -39,6 +39,27 @@ Content-Type: application/json
 { "protocol": 1, "ready": true }
 ```
 
+App 0.5.5 起，断线后第一次成功轮询可附带可选的 `resumed`；旧版 App 不带此字段：
+
+```json
+{
+  "protocol": 1,
+  "ready": true,
+  "resumed": {
+    "offlineMs": 123456,
+    "cause": "network",
+    "error": "SocketTimeoutException: ..."
+  }
+}
+```
+
+- `offlineMs`：App 自己估计的断线时长，整数毫秒，范围 0–604800000（7 天）。
+- `cause`：`frozen`（进程被系统挂起，两次循环间隔远超预期）、`network`（请求持续失败）、`restarted`（进程或无障碍服务重启）、`paused`（主人手动暂停）。
+- `error`：可选字符串，最近一次请求失败说明，服务端截取前 200 字符保存。
+- 非法 `resumed` 返回 HTTP 400，响应 `code` 为 `INVALID_INPUT`。
+
+服务端在两次轮询间隔大于 30 秒或收到 `resumed` 时记录一次断线；同时满足也只记录一次。首次轮询不自动记录，带 `resumed` 则照常记录；手动暂停也记录。
+
 无指令返回 `{ "protocol": 1, "job": null }`；有指令返回：
 
 ```json
@@ -78,9 +99,9 @@ Content-Type: application/json
 
 | 方法与路径 | 行为 |
 | --- | --- |
-| `POST /pair` | 创建一组新凭据，替换旧设备 |
-| `POST /revoke` | 删除设备与当前指令 |
-| `GET /status` | 配对、在线、就绪状态及当前指令摘要，不返回密钥和截图 |
+| `POST /pair` | 创建一组新凭据，替换旧设备，清空断线记录 |
+| `POST /revoke` | 删除设备、当前指令与断线记录 |
+| `GET /status` | 配对、在线、就绪状态、当前指令摘要及 `disconnects`，不返回密钥和截图 |
 | `GET /task` | `{ task, memories }`：当前或上一次手机任务（目标、状态、最近 40 步）和近期记忆 |
 | `POST /task/stop` | 停止正在进行的手机任务 |
 | `GET /addresses` | `{ addresses: string[] }`，本机内网 / VPN IPv4，用于推荐手机入口 |
@@ -89,6 +110,24 @@ Content-Type: application/json
 | `POST /cancel` | 取消尚未交付的指令；已交付操作不会被当作撤回成功 |
 
 所有接口响应 `Cache-Control: no-store`。
+
+`GET /status` 新增 `disconnects` 数组：最多返回最近 10 条，最新的在前，无记录时为 `[]`。服务端存储保留最近 30 条，重新配对或撤销时清空。
+
+```json
+{
+  "disconnects": [
+    {
+      "at": 1760000000000,
+      "gapMs": 130000,
+      "cause": "network",
+      "appOfflineMs": 123456,
+      "error": "SocketTimeoutException: ..."
+    }
+  ]
+}
+```
+
+每条记录的 `at` 是恢复轮询时的服务端 Unix 时间戳（毫秒），`gapMs` 是这次轮询减上次轮询的服务端时间间隔（首次轮询带 `resumed` 时，上次时间为 0）。`cause` 使用 App 报告的原因；没有报告则为 `unknown`。可选的 `appOfflineMs` 和 `error` 来自 App 的 `resumed`，旧版 App 没有这两个字段。
 
 ## 动作
 

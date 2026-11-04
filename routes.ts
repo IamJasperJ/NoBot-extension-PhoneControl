@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs'
 import { networkInterfaces } from 'node:os'
 import type { Context, Hono } from '../../apps/server/node_modules/hono'
 import type { ExtensionContext, ExtensionStorage } from '../../apps/server/src/extensions/types'
-import { Bridge } from './bridge'
+import { Bridge, parseResumed } from './bridge'
 import { connections } from './host'
 import { object, parseCommand, parseResult } from './protocol'
 import { currentTask, recentMemories, settingsOf, stopTask } from './tasks'
@@ -140,7 +140,10 @@ export function registerRoutes(app: Hono, storage: ExtensionStorage, t: Translat
     guard(async (c) => {
       const v = await body(c)
       if (v.protocol !== 1 || typeof v.ready !== 'boolean') return c.json({ code: 'PROTOCOL_MISMATCH' }, 400)
-      return c.json({ protocol: 1, job: bridge.poll(c.req.header('X-Device-Id') ?? '', v.ready) })
+      return c.json({
+        protocol: 1,
+        job: bridge.poll(c.req.header('X-Device-Id') ?? '', v.ready, parseResumed(v.resumed)),
+      })
     }),
   )
   app.post(

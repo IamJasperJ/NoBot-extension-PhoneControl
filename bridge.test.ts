@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { Hono } from '../../apps/server/node_modules/hono'
 import type { ExtensionStorage } from '../../apps/server/src/extensions/types'
-import { Bridge } from './bridge'
+import { Bridge, parseResumed } from './bridge'
 import { parseCommand, parseResult } from './protocol'
 import { isPrivateIpv4, localAddresses, registerRoutes } from './routes'
 
@@ -101,6 +101,92 @@ describe('设备指令状态机', () => {
   })
 })
 
+describe('断线记录', () => {
+  test('短间隔和恰好 30 秒不记录，超过 30 秒记录服务端间隔', () => {
+    const { bridge, pair, storage, advance } = setup()
+    advance(100)
+    bridge.poll(pair.deviceId, true)
+    advance(30_000)
+    bridge.poll(pair.deviceId, true)
+    expect(bridge.disconnects()).toEqual([])
+    advance(30_001)
+    bridge.poll(pair.deviceId, false)
+    const records = [{ at: 61_101, gapMs: 30_001, cause: 'unknown' as const }]
+    expect(bridge.disconnects()).toEqual(records)
+    expect(new Bridge(storage).disconnects()).toEqual(records)
+  })
+
+  test('短间隔也记录 App 原因、估计时长和截断后的错误，长间隔不重复记录', () => {
+    const { bridge, pair, advance } = setup()
+    advance(100)
+    bridge.poll(pair.deviceId, true, parseResumed({ offlineMs: 123456, cause: 'network', error: 'x'.repeat(201) }))
+    expect(bridge.disconnects()).toEqual([
+      { at: 1100, gapMs: 100, cause: 'network', appOfflineMs: 123456, error: 'x'.repeat(200) },
+    ])
+    advance(30_001)
+    bridge.poll(pair.deviceId, false, parseResumed({ offlineMs: 30_000, cause: 'paused' }))
+    expect(bridge.disconnects()).toHaveLength(2)
+    expect(bridge.disconnects()[1]).toMatchObject({ cause: 'paused', appOfflineMs: 30_000, gapMs: 30_001 })
+  })
+
+  test('首次轮询不记录，除非 App 主动报告恢复', () => {
+    const bridge = new Bridge(memory(), () => 100_000)
+    const pair = bridge.pair()
+    bridge.poll(pair.deviceId, true)
+    expect(bridge.disconnects()).toEqual([])
+    const next = bridge.pair()
+    bridge.poll(next.deviceId, true, parseResumed({ offlineMs: 42, cause: 'restarted' }))
+    expect(bridge.disconnects()).toEqual([{ at: 100_000, gapMs: 100_000, cause: 'restarted', appOfflineMs: 42 }])
+  })
+
+  test('存储只保留最近 30 条，状态返回最近 10 条且最新在前', () => {
+    const { bridge, pair, advance } = setup()
+    for (let i = 0; i < 35; i++) {
+      advance(30_001)
+      bridge.poll(pair.deviceId, true)
+    }
+    const records = bridge.disconnects()
+    expect(records).toHaveLength(30)
+    expect(records[0]?.at).toBe(1000 + 6 * 30_001)
+    expect(records[29]?.at).toBe(1000 + 35 * 30_001)
+    expect(bridge.status().disconnects).toEqual(records.slice(-10).reverse())
+    expect(bridge.disconnects()).toEqual(records)
+  })
+
+  test('重新配对和撤销会清空记录', () => {
+    const { bridge, pair, storage, advance } = setup()
+    advance(30_001)
+    bridge.poll(pair.deviceId, true)
+    expect(bridge.disconnects()).toHaveLength(1)
+    const next = bridge.pair()
+    expect(bridge.disconnects()).toEqual([])
+    expect(bridge.status().disconnects).toEqual([])
+    expect(storage.get('disconnects')).toBeUndefined()
+    bridge.poll(next.deviceId, true, parseResumed({ offlineMs: 0, cause: 'frozen' }))
+    expect(bridge.disconnects()).toHaveLength(1)
+    bridge.revoke()
+    expect(bridge.disconnects()).toEqual([])
+    expect(bridge.status().disconnects).toEqual([])
+    expect(storage.get('disconnects')).toBeUndefined()
+  })
+
+  test('恢复信息接受缺省、全部原因和时长边界，拒绝非法字段', () => {
+    expect(parseResumed(undefined)).toBeUndefined()
+    for (const cause of ['frozen', 'network', 'restarted', 'paused'] as const) {
+      for (const offlineMs of [0, 604_800_000]) expect(parseResumed({ offlineMs, cause })).toEqual({ offlineMs, cause })
+    }
+    expect(parseResumed({ offlineMs: 0, cause: 'frozen', error: '' })?.error).toBe('')
+    for (const value of [null, [], 'bad', 1, true, {}, { cause: 'frozen' }, { offlineMs: 0 }])
+      expect(() => parseResumed(value)).toThrow('INVALID_INPUT')
+    for (const offlineMs of [-1, 604_800_001, 0.5, NaN, Infinity, -Infinity, '0', null, undefined])
+      expect(() => parseResumed({ offlineMs, cause: 'frozen' })).toThrow('INVALID_INPUT')
+    for (const cause of ['unknown', 'FROZEN', '', 0, null, [], {}])
+      expect(() => parseResumed({ offlineMs: 0, cause })).toThrow('INVALID_INPUT')
+    for (const error of [null, 0, false, [], {}])
+      expect(() => parseResumed({ offlineMs: 0, cause: 'frozen', error })).toThrow('INVALID_INPUT')
+  })
+})
+
 describe('协议验证', () => {
   test('坐标、动作、输入长度和截图格式验证', () => {
     expect(parseCommand({ action: 'swipe', x: 0, y: 1, endX: 1, endY: 0 })).toMatchObject({ duration: 500 })
@@ -125,6 +211,44 @@ describe('协议验证', () => {
 })
 
 describe('HTTP 管理接口与手机入口', () => {
+  test('非法恢复信息返回 400，合法恢复信息可在状态中读取', async () => {
+    const storage = memory()
+    const bridge = new Bridge(storage)
+    const pair = bridge.pair()
+    const admin = new Hono()
+    const phone = new Hono()
+    registerRoutes(admin, storage, (v) => v)
+    registerRoutes(phone, storage, (v) => v, true)
+    const poll = (resumed: unknown) =>
+      phone.request('/poll', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${pair.token}`,
+          'X-Device-Id': pair.deviceId,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ protocol: 1, ready: true, resumed }),
+      })
+    for (const resumed of [
+      null,
+      [],
+      { offlineMs: -1, cause: 'frozen' },
+      { offlineMs: 0, cause: 'unknown' },
+      { offlineMs: 0, cause: 'network', error: 42 },
+    ]) {
+      const response = await poll(resumed)
+      expect(response.status).toBe(400)
+      expect(await response.json()).toMatchObject({ code: 'INVALID_INPUT' })
+    }
+    expect(bridge.status().lastSeen).toBe(0)
+    expect(bridge.disconnects()).toEqual([])
+    expect((await poll({ offlineMs: 123, cause: 'frozen', error: 'x'.repeat(201) })).status).toBe(200)
+    const status = await (await admin.request('/status')).json()
+    expect(status).toMatchObject({
+      disconnects: [{ cause: 'frozen', appOfflineMs: 123, error: 'x'.repeat(200) }],
+    })
+  })
+
   test('配对→鉴权→派发→回报→读取→撤销完整闭环', async () => {
     const storage = memory()
     const admin = new Hono()

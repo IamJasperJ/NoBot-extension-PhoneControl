@@ -79,4 +79,13 @@
   <string name="state_allowed">Allowed</string>
   <string name="state_denied">Not allowed; no notice is shown while controlled</string>
   <string name="privilege_title">Permission source</string>
+  <string name="section_outages">Recent disconnects</string>
+  <string name="outages_none">No disconnects recorded yet</string>
+  <string name="outage_line">%1$s · %2$d min · %3$s</string>
+  <string name="cause_frozen">App frozen by the system</string>
+  <string name="cause_network">Could not reach the server</string>
+  <string name="cause_restarted">App or accessibility service restarted</string>
+  <string name="cause_paused">Paused manually</string>
+  <string name="cause_unknown">Unknown cause</string>
+  <string name="outages_hint">Often frozen by the system: allow this app to run in the background without restrictions and auto-start, and lock it in recent apps. Could not reach the server: check whether EasyTier or your VPN is also being stopped by power saving.</string>
 </resources>
