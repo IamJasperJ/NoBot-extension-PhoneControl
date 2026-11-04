@@ -1,0 +1,25 @@
+plugins { id 'com.android.application' }
+android {
+  namespace 'dev.nobot.phone'
+  compileSdk 35
+  defaultConfig {
+    applicationId 'dev.nobot.phone'
+    minSdk 30
+    targetSdk 35
+    versionCode 6
+    versionName '0.4.2'
+  }
+  // AIDL：Shizuku 用户服务接口；BuildConfig：用户服务按版本号重启
+  buildFeatures { aidl true; buildConfig true }
+  compileOptions {
+    sourceCompatibility JavaVersion.VERSION_17
+    targetCompatibility JavaVersion.VERSION_17
+  }
+}
+dependencies {
+  // 只用 zxing 的纯 Java 解码核心；不引入 AndroidX、CameraX 或 Google Play 服务。
+  implementation 'com.google.zxing:core:3.5.3'
+  implementation 'dev.rikka.shizuku:api:13.1.5'
+  implementation 'dev.rikka.shizuku:provider:13.1.5'
+  testImplementation 'junit:junit:4.13.2'
+}

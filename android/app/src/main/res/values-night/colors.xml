@@ -1,0 +1,13 @@
+<resources>
+  <color name="bg">#09090B</color>
+  <color name="card">#18181B</color>
+  <color name="text">#F4F4F5</color>
+  <color name="muted">#A1A1AA</color>
+  <color name="line">#3F3F46</color>
+  <color name="soft">#27272A</color>
+  <color name="accent">#A78BFA</color>
+  <color name="on_accent">#18181B</color>
+  <color name="good">#4ADE80</color>
+  <color name="warn">#FBBF24</color>
+  <color name="bad">#F87171</color>
+</resources>

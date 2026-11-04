@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config xmlns:tools="http://schemas.android.com/tools">
+  <!-- 内网 IP 无法事先列成域名白名单，这里整体放开明文；是否允许 HTTP 由代码按解析出的地址判断。 -->
+  <base-config cleartextTrafficPermitted="true" tools:ignore="InsecureBaseConfiguration">
+    <trust-anchors><certificates src="system" /></trust-anchors>
+  </base-config>
+</network-security-config>
