@@ -4,6 +4,7 @@ import {
   blockedWord,
   elementAt,
   type Goal,
+  humanDrag,
   humanScroll,
   humanTap,
   matchApp,
@@ -346,6 +347,56 @@ describe('操作限制', () => {
     // 只执行了：点聊天框、输入、点搜索框、输入、回车、列应用；没有点支付、没有打开支付宝
     expect(acted).toEqual(['tap', 'type', 'tap', 'type', 'enter', 'apps'])
   })
+  test('输入前聚焦：拒绝非输入框、受限文字和不存在的元素，不产生点击、输入或回车', async () => {
+    const nodes = [
+      { text: '删除', clickable: true, bounds: [0, 100, 500, 200] },
+      { text: '展开', clickable: true, bounds: [0, 300, 500, 400] },
+      { text: '支付', editable: true, bounds: [0, 500, 500, 600] },
+      { text: '禁止输入', editable: true, bounds: [0, 700, 500, 800] },
+      { text: '搜索', editable: true, bounds: [0, 900, 500, 1000] },
+    ]
+    const f = ports([
+      ...[1, 2, 3, 4, 99, 5].map((element) =>
+        JSON.stringify({ action: { type: 'type', element, text: '猫', submit: true } }),
+      ),
+      '{"action":{"type":"done","summary":"x"}}',
+    ])
+    const inner = f.p.act
+    f.p.act = async (command) => {
+      if (command.action !== 'observe') return inner(command)
+      f.commands.push(command)
+      return { ok: true, code: 'OK', data: { width: 1000, height: 2000, packageName: 'com.example', nodes } }
+    }
+    const report = await runOperator(
+      goal({ policy: { allowed: [], blockedApps: [], blockedWords: ['禁止输入'] } }),
+      f.p,
+      new AbortController().signal,
+    )
+    expect(report.steps[0]?.result).toContain('not editable')
+    expect(report.steps[1]?.result).toContain('not editable')
+    expect(report.steps[2]?.result).toBe('blocked by the owner\'s settings ("支付")')
+    expect(report.steps[3]?.result).toBe('blocked by the owner\'s settings ("禁止输入")')
+    expect(report.steps[4]?.result).toBe('no element [99] on this screen')
+    expect(report.steps[5]?.result).toStartWith('OK')
+    // 只有最后的合法搜索框触发动作；前面的拒绝路径连聚焦点击也不能发出。
+    expect(f.commands.filter((c) => c.action !== 'observe').map((c) => c.action)).toEqual(['tap', 'type', 'enter'])
+  })
+  test('输入框聚焦失败后不输入、不提交；省略元素时仍支持当前聚焦输入框', async () => {
+    const f = ports(
+      [
+        '{"action":{"type":"type","element":2,"text":"不要输入","submit":true}}',
+        '{"action":{"type":"type","text":"当前输入框"}}',
+        '{"action":{"type":"done","summary":"x"}}',
+      ],
+      (command) => (command.action === 'tap' ? { ok: false, code: 'GESTURE_CANCELLED' } : { ok: true, code: 'OK' }),
+    )
+    const report = await runOperator(goal(), f.p, new AbortController().signal)
+    expect(report.steps[0]?.result).toBe('GESTURE_CANCELLED')
+    expect(report.steps[1]?.result).toStartWith('OK')
+    const acted = f.commands.filter((c) => c.action !== 'observe')
+    expect(acted.map((c) => c.action)).toEqual(['tap', 'type'])
+    expect(acted[1]).toEqual({ action: 'type', text: '当前输入框' })
+  })
   test('误入禁止的应用：除了返回和回桌面都不执行，提示里说明', async () => {
     const f = ports([
       '{"action":{"type":"scroll"}}',
@@ -369,5 +420,127 @@ describe('操作限制', () => {
     expect(report.steps[0]?.result).toContain('this app is blocked')
     expect(report.steps[1]?.result).toStartWith('OK')
     expect(f.prompts[0]).toContain("This app is blocked by the owner's settings")
+  })
+})
+
+describe('拖动', () => {
+  test('拟人拖动保留端点、七个弯曲途经点，按住与时长在范围内', () => {
+    for (const hold of [false, true]) {
+      const drag = humanDrag({ x: 0.2, y: 0.5 }, { x: 0.8, y: 0.5 }, hold, sequence(7))
+      if (drag.action !== 'drag') throw new Error('应生成拖动')
+      expect([drag.x, drag.y, drag.endX, drag.endY]).toEqual([0.2, 0.5, 0.8, 0.5])
+      expect(drag.points).toHaveLength(7)
+      expect(drag.points?.[3]?.[1]).not.toBe(0.5)
+      expect(drag.hold).toBeGreaterThanOrEqual(hold ? 600 : 40)
+      expect(drag.hold).toBeLessThanOrEqual(hold ? 900 : 90)
+      expect(drag.duration).toBeGreaterThanOrEqual(100)
+      expect(drag.duration).toBeLessThanOrEqual(3000)
+      expect(drag.rest).toBeGreaterThanOrEqual(120)
+      expect(drag.rest).toBeLessThanOrEqual(260)
+    }
+    for (const from of [
+      { x: -1, y: 2 },
+      { x: 0, y: 0 },
+      { x: 1, y: 1 },
+    ]) {
+      const drag = humanDrag(from, { x: 2, y: -1 }, false, sequence(9))
+      if (drag.action !== 'drag') throw new Error('应生成拖动')
+      for (const pair of [[drag.x, drag.y], [drag.endX, drag.endY], ...(drag.points ?? [])])
+        for (const coordinate of pair) {
+          expect(coordinate).toBeGreaterThanOrEqual(0)
+          expect(coordinate).toBeLessThanOrEqual(1)
+        }
+    }
+  })
+  test('解析两端的元素、坐标和混合形式，hold 只接受严格 true', () => {
+    for (const start of [{ element: 1 }, { x: 0.2, y: 0.5 }])
+      for (const end of [{ to_element: 2 }, { to_x: 0.8, to_y: 0.5 }])
+        for (const hold of [true, false, undefined, 'true', 1])
+          expect(
+            parseDecision(JSON.stringify({ action: { type: 'drag', ...start, ...end, hold } })).action,
+          ).toMatchObject({ type: 'drag', ...start, ...end, hold: hold === true })
+    for (const fields of [{ element: 1 }, { to_element: 2 }, { x: 0.2, to_element: 2 }, { element: 1, to_y: 0.3 }])
+      expect(() => parseDecision(JSON.stringify({ action: { type: 'drag', ...fields } }))).toThrow(
+        'drag needs "element" or "x" and "y" for the start, and "to_element" or "to_x" and "to_y" for the end',
+      )
+    expect(systemPrompt(goal())).toContain('Use scroll, not drag')
+  })
+  test('正常拖动、坐标夹限及步骤描述', async () => {
+    const f = ports(
+      [
+        { type: 'drag', element: 1, to_element: 2, hold: true },
+        { type: 'drag', x: 0.2, y: 0.5, to_x: 0.8, to_y: 0.5 },
+        { type: 'drag', element: 1, to_x: 0.5, to_y: 0.9, hold: true },
+        { type: 'drag', x: -1, y: 2, to_x: 2, to_y: -1 },
+      ].map((action) => JSON.stringify({ action })),
+    )
+    const report = await runOperator(goal(), f.p, new AbortController().signal)
+    const drags = f.commands.filter((c) => c.action === 'drag')
+    expect(drags).toHaveLength(4)
+    expect(drags[0]?.hold).toBeGreaterThanOrEqual(600)
+    expect(drags[3]).toMatchObject({ x: 0, y: 1, endX: 1, endY: 0 })
+    expect(report.steps.slice(0, 3).map((s) => s.action)).toEqual([
+      'hold-drag [1] "推荐" → [2] "搜索"',
+      'drag (0.20, 0.50) → (0.80, 0.50)',
+      'hold-drag [1] "推荐" → (0.50, 0.90)',
+    ])
+  })
+  test('两端分别检查元素和坐标限制，delete 放开后允许拖入删除区', async () => {
+    for (const allowed of [[], ['delete' as const]]) {
+      const actions = [
+        { type: 'drag', element: 1, to_element: 3 },
+        { type: 'drag', x: 0.1, y: 0.075, to_x: 0.5, to_y: 0.85 },
+        { type: 'drag', element: 2, to_element: 1 },
+        { type: 'drag', x: 0.6, y: 0.075, to_element: 1 },
+      ]
+      const f = ports(actions.map((action) => JSON.stringify({ action })))
+      const inner = f.p.act
+      f.p.act = async (command) =>
+        command.action === 'observe'
+          ? {
+              ok: true,
+              code: 'OK',
+              data: screenData([{ text: '删除', clickable: true, bounds: [0, 1600, 1000, 1800] }]),
+            }
+          : inner(command)
+      const report = await runOperator(
+        goal({ policy: { allowed, blockedApps: [], blockedWords: ['搜索'] } }),
+        f.p,
+        new AbortController().signal,
+      )
+      for (const index of [0, 1])
+        expect(report.steps[index]?.result).toStartWith(
+          allowed.length ? 'OK' : 'blocked by the owner\'s settings ("删除")',
+        )
+      for (const index of [2, 3]) expect(report.steps[index]?.result).toBe('blocked by the owner\'s settings ("搜索")')
+      expect(f.commands.filter((c) => c.action === 'drag')).toHaveLength(allowed.length ? 2 : 0)
+    }
+  })
+  test('禁止的应用不执行拖动', async () => {
+    const f = ports(['{"action":{"type":"drag","element":1,"to_element":2}}'])
+    f.p.act = async (command) => {
+      f.commands.push(command)
+      return { ok: true, code: 'OK', data: { ...screenData(), packageName: 'com.android.settings' } }
+    }
+    const report = await runOperator(goal(), f.p, new AbortController().signal)
+    expect(report.steps[0]?.result).toContain('this app is blocked')
+    expect(f.commands.every((c) => c.action === 'observe')).toBe(true)
+  })
+  test('不存在的两端元素和旧版 App 的回报', async () => {
+    const f = ports(
+      [
+        '{"action":{"type":"drag","element":99,"to_element":2}}',
+        '{"action":{"type":"drag","element":1,"to_element":98}}',
+        '{"action":{"type":"drag","element":1,"to_element":2}}',
+      ],
+      () => ({ ok: false, code: 'UNSUPPORTED_ACTION' }),
+    )
+    const report = await runOperator(goal(), f.p, new AbortController().signal)
+    expect(report.steps.slice(0, 3).map((s) => s.result)).toEqual([
+      'no element [99] on this screen',
+      'no element [98] on this screen',
+      'drag is not supported by this companion app version (needs 0.5.1); try another way',
+    ])
+    expect(f.commands.filter((c) => c.action === 'drag')).toHaveLength(1)
   })
 })

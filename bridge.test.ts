@@ -201,3 +201,67 @@ describe('本机地址推荐', () => {
     expect(isPrivateIpv4('172.32.0.1')).toBe(false)
   })
 })
+
+describe('拖动协议', () => {
+  const base = { action: 'drag' as const, x: 0, y: 1, endX: 1, endY: 0 }
+  test('默认值、边界和途经点', () => {
+    expect(parseCommand(base)).toEqual({ ...base, hold: 0, duration: 600, rest: 150 })
+    for (const values of [
+      { hold: 0, duration: 100, rest: 0 },
+      { hold: 2000, duration: 3000, rest: 1000 },
+    ])
+      expect(
+        parseCommand({
+          ...base,
+          ...values,
+          points: [
+            [0, 1],
+            [1, 0],
+          ],
+        }),
+      ).toEqual({
+        ...base,
+        ...values,
+        points: [
+          [0, 1],
+          [1, 0],
+        ],
+      })
+  })
+  test('拒绝越界、非整数和无效途经点', () => {
+    for (const [key, values] of Object.entries({
+      x: [-0.1, 1.1, NaN, Infinity, '0', null],
+      y: [-1, 2, NaN],
+      endX: [-1, 2, Infinity],
+      endY: [-1, 2, NaN],
+      hold: [-1, 2001, 0.5, NaN, Infinity, '1', null],
+      duration: [99, 3001, 100.5, NaN, Infinity, '600', null],
+      rest: [-1, 1001, 0.5, NaN, Infinity, '150', null],
+      points: [
+        Array.from({ length: 17 }, () => [0, 0]),
+        [[-1, 0]],
+        [[0, 2]],
+        [[NaN, 0]],
+        [[Infinity, 0]],
+        [[0]],
+        [[0, 0, 0]],
+        [null],
+        'bad',
+      ],
+    })) {
+      for (const value of values) expect(() => parseCommand({ ...base, [key]: value })).toThrow('INVALID_INPUT')
+    }
+    for (const key of ['x', 'y', 'endX', 'endY'])
+      expect(() => parseCommand({ ...base, [key]: undefined })).toThrow('INVALID_INPUT')
+  })
+  test('swipe 继续接受途经点并保留自己的时长范围', () => {
+    expect(parseCommand({ ...base, action: 'swipe', points: [[0.5, 0.5]] })).toEqual({
+      ...base,
+      action: 'swipe',
+      duration: 500,
+      points: [[0.5, 0.5]],
+    })
+    expect(() => parseCommand({ ...base, action: 'swipe', duration: 2001 })).toThrow('INVALID_INPUT')
+    expect(() => parseCommand({ ...base, action: 'swipe', points: [[0, 2]] })).toThrow('INVALID_INPUT')
+  })
+})

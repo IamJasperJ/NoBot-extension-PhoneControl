@@ -29,6 +29,16 @@ export interface Screen {
 export type Action =
   | { type: 'tap'; element?: number; x?: number; y?: number }
   | { type: 'long_press'; element?: number; x?: number; y?: number }
+  | {
+      type: 'drag'
+      element?: number
+      x?: number
+      y?: number
+      to_element?: number
+      to_x?: number
+      to_y?: number
+      hold: boolean
+    }
   | { type: 'type'; text: string; element?: number; submit?: boolean }
   | { type: 'scroll'; direction: 'up' | 'down' | 'left' | 'right'; distance: 'short' | 'medium' | 'long' }
   | { type: 'open_app'; name: string }
@@ -318,12 +328,7 @@ export function humanScroll(
   const control: [number, number] = vertical
     ? [clamp((start[0] + end[0]) / 2 + bend), (start[1] + end[1]) / 2]
     : [(start[0] + end[0]) / 2, clamp((start[1] + end[1]) / 2 + bend)]
-  const points: [number, number][] = []
-  for (let i = 1; i < 8; i++) {
-    const k = i / 8
-    const q = (a: number, c: number, b: number) => (1 - k) ** 2 * a + 2 * (1 - k) * k * c + k ** 2 * b
-    points.push([clamp(q(start[0], control[0], end[0])), clamp(q(start[1], control[1], end[1]))])
-  }
+  const points = bezierPoints(start, end, control)
   return {
     action: 'swipe',
     x: start[0],
@@ -332,6 +337,48 @@ export function humanScroll(
     endY: end[1],
     duration: Math.round(between(random, 220, 520) * (distance === 'long' ? 1.25 : 1)),
     points,
+  }
+}
+
+/** 共用二次贝塞尔取点，起止点由各手势自行选择 */
+function bezierPoints(start: [number, number], end: [number, number], control: [number, number]) {
+  const points: [number, number][] = []
+  for (let i = 1; i < 8; i++) {
+    const k = i / 8
+    const q = (a: number, c: number, b: number) => (1 - k) ** 2 * a + 2 * (1 - k) * k * c + k ** 2 * b
+    points.push([clamp(q(start[0], control[0], end[0])), clamp(q(start[1], control[1], end[1]))])
+  }
+  return points
+}
+
+/** 人手的拖动：起止点已由调用方选好（pointIn 带抖动），轨迹是略弯的二次贝塞尔曲线 */
+export function humanDrag(
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+  hold: boolean,
+  random: () => number,
+): Command {
+  const start: [number, number] = [clamp(from.x), clamp(from.y)]
+  const end: [number, number] = [clamp(to.x), clamp(to.y)]
+  const dx = end[0] - start[0],
+    dy = end[1] - start[1]
+  const d = Math.hypot(dx, dy)
+  const bend = between(random, 0.02, 0.06) * (random() < 0.5 ? -1 : 1)
+  // 用单位垂线偏移控制点；起终点重合时选水平方向，避免除以零。
+  const control: [number, number] = [
+    (start[0] + end[0]) / 2 + (d ? -dy / d : 1) * bend,
+    (start[1] + end[1]) / 2 + (d ? dx / d : 0) * bend,
+  ]
+  return {
+    action: 'drag',
+    x: start[0],
+    y: start[1],
+    endX: end[0],
+    endY: end[1],
+    hold: Math.round(hold ? between(random, 600, 900) : between(random, 40, 90)),
+    duration: clamp(Math.round(between(random, 350, 650) + d * between(random, 500, 800)), 100, 3000),
+    rest: Math.round(between(random, 120, 260)),
+    points: bezierPoints(start, end, control),
   }
 }
 
@@ -363,6 +410,7 @@ ${persona}Each turn you receive a screenshot where interactive elements have num
 Actions:
 - {"type":"tap","element":N} — or {"type":"tap","x":0.5,"y":0.3} with coordinates normalized to the full screen when no box fits
 - {"type":"long_press","element":N}
+- {"type":"drag","element":N,"to_element":M} — press and drag something to another place (sliders, progress bars, puzzle pieces, reordering); use "x"/"y" and "to_x"/"to_y" instead of elements when needed; add "hold":true to long-press first before moving (to pick up icons or list items). Use scroll, not drag, for simply scrolling content.
 - {"type":"type","text":"...","element":N,"submit":true} — replaces the text of the field; "element" taps the field first, "submit" presses enter/search afterwards
 - {"type":"scroll","direction":"down","distance":"medium"} — direction is where you want to look (down shows content further down); distance short|medium|long
 - {"type":"open_app","name":"bilibili"} — by app name or package name
@@ -408,6 +456,13 @@ const describeAction = (action: Action, screen?: Screen) => {
     case 'tap':
     case 'long_press':
       return `${action.type}${action.element ? target(action.element) : ` (${action.x?.toFixed(2)}, ${action.y?.toFixed(2)})`}`
+    case 'drag': {
+      const from = action.element ? target(action.element) : ` (${action.x?.toFixed(2)}, ${action.y?.toFixed(2)})`
+      const to = action.to_element
+        ? target(action.to_element)
+        : ` (${action.to_x?.toFixed(2)}, ${action.to_y?.toFixed(2)})`
+      return `${action.hold ? 'hold-drag' : 'drag'}${from} →${to}`
+    }
     case 'type':
       return `type${target(action.element)} "${clip(action.text, 40)}"${action.submit ? ' + enter' : ''}`
     case 'scroll':
@@ -492,6 +547,20 @@ export function parseDecision(text: string): Decision {
         throw new Error(`${raw.type} needs "element" or "x" and "y"`)
       action = { type: raw.type, element, x, y }
       break
+    case 'drag': {
+      const to_element = optionalNumber(raw.to_element)
+      const to_x = optionalNumber(raw.to_x),
+        to_y = optionalNumber(raw.to_y)
+      if (
+        (!element && (x === undefined || y === undefined)) ||
+        (!to_element && (to_x === undefined || to_y === undefined))
+      )
+        throw new Error(
+          'drag needs "element" or "x" and "y" for the start, and "to_element" or "to_x" and "to_y" for the end',
+        )
+      action = { type: 'drag', element, x, y, to_element, to_x, to_y, hold: raw.hold === true }
+      break
+    }
     case 'type':
       if (typeof raw.text !== 'string' || !raw.text) throw new Error('type needs non-empty "text"')
       action = { type: 'type', text: raw.text.slice(0, 2000), element, submit: raw.submit === true }
@@ -674,16 +743,16 @@ export async function runOperator(goal: Goal, ports: OperatorPorts, signal: Abor
       let result = ''
       const element = 'element' in action && action.element ? screen.elements[action.element - 1] : undefined
       /** 要点的位置命中了禁止的按钮时返回拦截说明 */
-      const refuse = (p: { x: number; y: number } | null) => {
+      const refuse = (p: { x: number; y: number } | null, targetElement: Element | null | undefined = element) => {
         if (inBlockedApp) return "blocked: this app is blocked by the owner's settings; go back or home"
-        const target = element ?? (p ? elementAt(screen, p) : undefined)
+        const target = targetElement ?? (p ? elementAt(screen, p) : undefined)
         const word = target ? blockedWord(target.label, policy) : null
         return word ? `blocked by the owner's settings ("${word}")` : ''
       }
       const point = (a: { element?: number; x?: number; y?: number }) =>
         a.element
-          ? element
-            ? pointIn(element, screen, ports.random)
+          ? screen.elements[a.element - 1]
+            ? pointIn(screen.elements[a.element - 1]!, screen, ports.random)
             : null
           : { x: clamp(a.x ?? 0.5), y: clamp(a.y ?? 0.5) }
       switch (action.type) {
@@ -703,11 +772,38 @@ export async function runOperator(goal: Goal, ports: OperatorPorts, signal: Abor
           if (result === 'UNSUPPORTED_ACTION') result = 'long press is not supported by this companion app version'
           break
         }
+        case 'drag': {
+          if (inBlockedApp) {
+            result = refuse(null)
+            break
+          }
+          const from = point(action)
+          const to = point({ element: action.to_element, x: action.to_x, y: action.to_y })
+          result = !from
+            ? `no element [${action.element}] on this screen`
+            : !to
+              ? `no element [${action.to_element}] on this screen`
+              : refuse(from) ||
+                refuse(
+                  to,
+                  action.to_element ? screen.elements[action.to_element - 1] : (elementAt(screen, to) ?? null),
+                ) ||
+                (await act(humanDrag(from, to, action.hold, ports.random)))
+          if (result === 'UNSUPPORTED_ACTION')
+            result = 'drag is not supported by this companion app version (needs 0.5.1); try another way'
+          break
+        }
         case 'type': {
           result = inBlockedApp ? refuse(null) : 'OK'
           if (result === 'OK' && action.element) {
             const p = point(action)
-            result = p ? await act(humanTap(p, ports.random)) : `no element [${action.element}] on this screen`
+            // 聚焦本身也会点击：先确认是输入框，再复用点击限制，不能借输入动作触发受限按钮。
+            result =
+              !p || !element
+                ? `no element [${action.element}] on this screen`
+                : !element.editable
+                  ? `element [${action.element}] is not editable; choose an editable field`
+                  : refuse(p) || (await act(humanTap(p, ports.random)))
             if (result === 'OK') await ports.sleep(Math.round(between(ports.random, 350, 700)))
           }
           if (result === 'OK') result = await act({ action: 'type', text: action.text })

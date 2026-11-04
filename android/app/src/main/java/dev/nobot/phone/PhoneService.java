@@ -322,6 +322,7 @@ public class PhoneService extends AccessibilityService {
       switch (action) {
         case "observe": observe(future); return;
         case "tap": case "swipe": case "longpress": gesture(command, future); return;
+        case "drag": drag(command, future); return;
         case "enter": {
           // 输入法的回车 / 搜索 / 发送键（Android 11 起的无障碍动作）
           AccessibilityNodeInfo node = findFocus(AccessibilityNodeInfo.FOCUS_INPUT);
@@ -405,6 +406,60 @@ public class PhoneService extends AccessibilityService {
     GestureDescription description = new GestureDescription.Builder().addStroke(new GestureDescription.StrokeDescription(path, 0, duration)).build();
     boolean accepted = dispatchGesture(description, new GestureResultCallback() {
       @Override public void onCompleted(GestureDescription gesture) { future.complete(result(true, "OK")); }
+      @Override public void onCancelled(GestureDescription gesture) { future.complete(result(false, "GESTURE_CANCELLED")); }
+    }, main);
+    if (!accepted) future.complete(result(false, "GESTURE_REJECTED"));
+  }
+
+  /**
+   * 拖动：按下 → 原地按住 hold 毫秒 → 沿途经点移动 duration 毫秒 → 在终点停 rest 毫秒再抬起。
+   * 一笔手势的速度是按路径长度平均分配的，没法「先停住再走」，所以拆成几段用 continueStroke 接起来：
+   * 前一段 willContinue=true 时手指不抬起，下一段必须从上一段的终点开始，并在上一段完成后立刻派发。
+   */
+  private void drag(JSONObject command, CompletableFuture<JSONObject> future) throws Exception {
+    Rect bounds = getSystemService(WindowManager.class).getMaximumWindowMetrics().getBounds();
+    float x = coordinate(command, "x", bounds.width()), y = coordinate(command, "y", bounds.height());
+    float endX = coordinate(command, "endX", bounds.width()), endY = coordinate(command, "endY", bounds.height());
+    int hold = command.optInt("hold", 0), duration = command.optInt("duration", 600), rest = command.optInt("rest", 150);
+    if (hold < 0 || hold > 2000 || duration < 100 || duration > 3000 || rest < 0 || rest > 1000) throw new IllegalArgumentException();
+    Path move = new Path();
+    move.moveTo(x, y);
+    JSONArray points = command.optJSONArray("points");
+    if (points != null && points.length() > 16) throw new IllegalArgumentException();
+    for (int i = 0; points != null && i < points.length(); i++) {
+      JSONArray point = points.getJSONArray(i);
+      move.lineTo(unit(point.getDouble(0), bounds.width()), unit(point.getDouble(1), bounds.height()));
+    }
+    move.lineTo(endX, endY);
+    java.util.List<Path> paths = new java.util.ArrayList<>();
+    java.util.List<Integer> durations = new java.util.ArrayList<>();
+    if (hold > 0) { paths.add(still(x, y)); durations.add(hold); }
+    paths.add(move); durations.add(duration);
+    if (rest > 0) { paths.add(still(endX, endY)); durations.add(rest); }
+    stroke(paths, durations, 0, null, future);
+  }
+
+  /** 原地不动的一段（只有起点的路径，和点按一样） */
+  private static Path still(float x, float y) {
+    Path path = new Path();
+    path.moveTo(x, y);
+    return path;
+  }
+
+  /** 依次派发拖动的第 index 段；最后一段抬起手指 */
+  private void stroke(java.util.List<Path> paths, java.util.List<Integer> durations, int index,
+      GestureDescription.StrokeDescription previous, CompletableFuture<JSONObject> future) {
+    if (future.isDone()) return;
+    boolean last = index == paths.size() - 1;
+    GestureDescription.StrokeDescription stroke = previous == null
+        ? new GestureDescription.StrokeDescription(paths.get(index), 0, durations.get(index), !last)
+        : previous.continueStroke(paths.get(index), 0, durations.get(index), !last);
+    GestureDescription description = new GestureDescription.Builder().addStroke(stroke).build();
+    boolean accepted = dispatchGesture(description, new GestureResultCallback() {
+      @Override public void onCompleted(GestureDescription gesture) {
+        if (last) future.complete(result(true, "OK"));
+        else stroke(paths, durations, index + 1, stroke, future);
+      }
       @Override public void onCancelled(GestureDescription gesture) { future.complete(result(false, "GESTURE_CANCELLED")); }
     }, main);
     if (!accepted) future.complete(result(false, "GESTURE_REJECTED"));

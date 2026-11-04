@@ -223,3 +223,28 @@ test('设置转换成操作限制：默认全部禁止；名单按换行或逗�
     ),
   ).toEqual({ allowed: ['like', 'system'], blockedApps: ['支付宝', 'com.tencent.mm'], blockedWords: ['抽奖', '红包'] })
 })
+
+test('phone_control 开启后把解析的 drag 指令放进队列', async () => {
+  const ctx = context({ directTool: true })
+  const bridge = new Bridge(ctx.storage)
+  const pair = bridge.pair()
+  bridge.poll(pair.deviceId, true)
+  const direct = tool(ctx, 'phone_control')!
+  expect(direct.parameters).toMatchObject({
+    properties: {
+      action: { enum: expect.arrayContaining(['drag']) },
+      duration: { maximum: 3000 },
+      hold: { type: 'integer', minimum: 0, maximum: 2000 },
+      rest: { type: 'integer', minimum: 0, maximum: 1000 },
+    },
+  })
+  for (const extra of [{}, { hold: 800, duration: 3000, rest: 200 }]) {
+    const args = { action: 'drag' as const, x: 0.2, y: 0.5, endX: 0.8, endY: 0.5, ...extra }
+    const pending = direct.run(args, toolCtx(ctx))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const job = bridge.poll(pair.deviceId, true)
+    expect(job?.command).toEqual({ hold: 0, duration: 600, rest: 150, ...args })
+    bridge.finish(pair.deviceId, job?.id ?? '', { ok: true, code: 'OK' })
+    expect((await pending).content).toBe('{"ok":true,"code":"OK"}')
+  }
+})
