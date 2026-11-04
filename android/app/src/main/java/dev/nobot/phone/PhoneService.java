@@ -321,7 +321,15 @@ public class PhoneService extends AccessibilityService {
       String action = command.getString("action");
       switch (action) {
         case "observe": observe(future); return;
-        case "tap": case "swipe": gesture(command, future); return;
+        case "tap": case "swipe": case "longpress": gesture(command, future); return;
+        case "enter": {
+          // 输入法的回车 / 搜索 / 发送键（Android 11 起的无障碍动作）
+          AccessibilityNodeInfo node = findFocus(AccessibilityNodeInfo.FOCUS_INPUT);
+          if (node == null || !node.isEditable()) { future.complete(result(false, "NO_EDITABLE_FOCUS")); return; }
+          boolean success = node.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.getId());
+          future.complete(result(success, success ? "OK" : "ACTION_FAILED")); return;
+        }
+        case "apps": apps(future); return;
         case "type": {
           String text = command.getString("text");
           if (text.isEmpty() || text.length() > 2000) throw new IllegalArgumentException();
@@ -351,20 +359,48 @@ public class PhoneService extends AccessibilityService {
     } catch (Exception e) { future.complete(result(false, "ACTION_FAILED")); }
   }
 
-  private float coordinate(JSONObject command, String key, int size) throws Exception {
-    double value = command.getDouble(key);
+  private float coordinate(JSONObject command, String key, int size) throws Exception { return unit(command.getDouble(key), size); }
+  private static float unit(double value, int size) {
     if (!Double.isFinite(value) || value < 0 || value > 1) throw new IllegalArgumentException();
     return (float) (value * (size - 1));
   }
+
+  /** 桌面上能打开的应用（名称 + 包名），操作员按名字打开应用时用 */
+  private void apps(CompletableFuture<JSONObject> future) throws Exception {
+    android.content.pm.PackageManager manager = getPackageManager();
+    Intent launcher = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER);
+    JSONArray list = new JSONArray();
+    java.util.Set<String> seen = new java.util.HashSet<>();
+    for (android.content.pm.ResolveInfo info : manager.queryIntentActivities(launcher, 0)) {
+      String name = info.activityInfo.packageName;
+      if (name.equals(getPackageName()) || !seen.add(name) || list.length() >= 300) continue;
+      list.put(new JSONObject().put("label", limited(info.loadLabel(manager))).put("packageName", name));
+    }
+    future.complete(result(true, "OK").put("data", new JSONObject().put("apps", list)));
+  }
+  /** 点按、长按、滑动。滑动可带途经点（服务端生成的弧线），让轨迹像手指划出来的而不是一条直线。 */
   private void gesture(JSONObject command, CompletableFuture<JSONObject> future) throws Exception {
     Rect bounds = getSystemService(WindowManager.class).getMaximumWindowMetrics().getBounds();
     Path path = new Path();
     path.moveTo(coordinate(command, "x", bounds.width()), coordinate(command, "y", bounds.height()));
-    int duration = 80;
-    if (command.getString("action").equals("swipe")) {
+    String action = command.getString("action");
+    int duration;
+    if (action.equals("swipe")) {
+      JSONArray points = command.optJSONArray("points");
+      if (points != null && points.length() > 16) throw new IllegalArgumentException();
+      for (int i = 0; points != null && i < points.length(); i++) {
+        JSONArray point = points.getJSONArray(i);
+        path.lineTo(unit(point.getDouble(0), bounds.width()), unit(point.getDouble(1), bounds.height()));
+      }
       path.lineTo(coordinate(command, "endX", bounds.width()), coordinate(command, "endY", bounds.height()));
       duration = command.optInt("duration", 500);
       if (duration < 100 || duration > 2000) throw new IllegalArgumentException();
+    } else if (action.equals("longpress")) {
+      duration = command.optInt("duration", 700);
+      if (duration < 400 || duration > 2000) throw new IllegalArgumentException();
+    } else {
+      duration = command.optInt("duration", 80);
+      if (duration < 40 || duration > 400) throw new IllegalArgumentException();
     }
     GestureDescription description = new GestureDescription.Builder().addStroke(new GestureDescription.StrokeDescription(path, 0, duration)).build();
     boolean accepted = dispatchGesture(description, new GestureResultCallback() {
