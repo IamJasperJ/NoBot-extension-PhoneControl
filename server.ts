@@ -11,7 +11,7 @@ export default {
   id: 'phone-control',
   name: t('手机控制'),
   description: t('通过安卓伴侣连接并控制手机'),
-  version: '0.5.2',
+  version: '0.5.3',
   defaultSettings: { ...DEFAULT_SETTINGS },
   settingsSchema: [
     { key: 'chatId', type: 'string', label: t('允许使用手机的会话 ID'), hint: t('留空时不向模型提供手机工具') },
@@ -43,6 +43,7 @@ export default {
     { key: 'allowPost', type: 'boolean', label: t('允许发送消息、发布、评论、转发') },
     { key: 'allowPurchase', type: 'boolean', label: t('允许购买、付款、充值、转账'), hint: t('建议保持关闭') },
     { key: 'allowDelete', type: 'boolean', label: t('允许删除、卸载') },
+    { key: 'allowPassword', type: 'boolean', label: t('允许输入密码、支付码与验证码'), hint: t('建议保持关闭') },
     { key: 'allowSystem', type: 'boolean', label: t('允许修改系统设置'), hint: t('不允许时也不会打开「设置」应用') },
     {
       key: 'blockedApps',

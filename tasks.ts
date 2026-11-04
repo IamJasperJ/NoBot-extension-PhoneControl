@@ -17,6 +17,7 @@ export interface PhoneSettings {
   allowPurchase: boolean
   allowDelete: boolean
   allowSystem: boolean
+  allowPassword: boolean
   /** 每行一个应用名称或包名 */
   blockedApps: string
   /** 每行一个不许点的按钮文字 */
@@ -35,6 +36,7 @@ export const DEFAULT_SETTINGS: PhoneSettings = {
   allowPurchase: false,
   allowDelete: false,
   allowSystem: false,
+  allowPassword: false,
   blockedApps: '',
   blockedWords: '',
 }
@@ -56,6 +58,7 @@ export function settingsOf(raw: Record<string, unknown>): PhoneSettings {
     allowPurchase: raw.allowPurchase === true,
     allowDelete: raw.allowDelete === true,
     allowSystem: raw.allowSystem === true,
+    allowPassword: raw.allowPassword === true,
     blockedApps: typeof raw.blockedApps === 'string' ? raw.blockedApps : '',
     blockedWords: typeof raw.blockedWords === 'string' ? raw.blockedWords : '',
   }
@@ -76,6 +79,7 @@ export function policyOf(settings: PhoneSettings): Policy {
   if (settings.allowPurchase) allowed.push('purchase')
   if (settings.allowDelete) allowed.push('delete')
   if (settings.allowSystem) allowed.push('system')
+  if (settings.allowPassword) allowed.push('password')
   return { allowed, blockedApps: lines(settings.blockedApps), blockedWords: lines(settings.blockedWords) }
 }
 

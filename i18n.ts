@@ -29,6 +29,7 @@ const en: Record<string, string> = {
   '允许购买、付款、充值、转账': 'Allow buying, paying, top-ups and transfers',
   建议保持关闭: 'Keeping this off is recommended',
   '允许删除、卸载': 'Allow deleting and uninstalling',
+  '允许输入密码、支付码与验证码': 'Allow entering passwords, payment codes and verification codes',
   允许修改系统设置: 'Allow changing system settings',
   '不允许时也不会打开「设置」应用': 'When off, the Settings app is not opened either',
   禁止打开的应用: 'Apps not to open',
