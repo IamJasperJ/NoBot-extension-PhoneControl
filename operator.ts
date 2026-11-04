@@ -376,8 +376,17 @@ export function humanDrag(
     endX: end[0],
     endY: end[1],
     hold: Math.round(hold ? between(random, 600, 900) : between(random, 40, 90)),
-    duration: clamp(Math.round(between(random, 350, 650) + d * between(random, 500, 800)), 100, 3000),
-    rest: Math.round(between(random, 120, 260)),
+    // 按住拖要放慢，避免被当成甩动；启动器还要在目标格子悬停一阵才会让位。
+    duration: clamp(
+      Math.round(
+        hold
+          ? between(random, 500, 800) + d * between(random, 700, 1000)
+          : between(random, 350, 650) + d * between(random, 500, 800),
+      ),
+      100,
+      3000,
+    ),
+    rest: Math.round(hold ? between(random, 550, 900) : between(random, 120, 260)),
     points: bezierPoints(start, end, control),
   }
 }

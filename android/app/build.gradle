@@ -6,8 +6,8 @@ android {
     applicationId 'dev.nobot.phone'
     minSdk 30
     targetSdk 35
-    versionCode 8
-    versionName '0.5.1'
+    versionCode 9
+    versionName '0.5.2'
   }
   // AIDL：Shizuku 用户服务接口；BuildConfig：用户服务按版本号重启
   buildFeatures { aidl true; buildConfig true }

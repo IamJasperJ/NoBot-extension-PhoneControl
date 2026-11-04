@@ -433,10 +433,10 @@ describe('拖动', () => {
       expect(drag.points?.[3]?.[1]).not.toBe(0.5)
       expect(drag.hold).toBeGreaterThanOrEqual(hold ? 600 : 40)
       expect(drag.hold).toBeLessThanOrEqual(hold ? 900 : 90)
-      expect(drag.duration).toBeGreaterThanOrEqual(100)
-      expect(drag.duration).toBeLessThanOrEqual(3000)
-      expect(drag.rest).toBeGreaterThanOrEqual(120)
-      expect(drag.rest).toBeLessThanOrEqual(260)
+      expect(drag.duration).toBeGreaterThanOrEqual(hold ? 920 : 650)
+      expect(drag.duration).toBeLessThanOrEqual(hold ? 1400 : 1130)
+      expect(drag.rest).toBeGreaterThanOrEqual(hold ? 550 : 120)
+      expect(drag.rest).toBeLessThanOrEqual(hold ? 900 : 260)
     }
     for (const from of [
       { x: -1, y: 2 },
@@ -450,6 +450,15 @@ describe('拖动', () => {
           expect(coordinate).toBeGreaterThanOrEqual(0)
           expect(coordinate).toBeLessThanOrEqual(1)
         }
+    }
+  })
+  test('按住拖在终点至少悬停 550 毫秒，等待启动器让位', () => {
+    for (const value of [0, 0.5, 1]) {
+      const drag = humanDrag({ x: 0.2, y: 0.5 }, { x: 0.8, y: 0.5 }, true, () => value)
+      if (drag.action !== 'drag') throw new Error('应生成拖动')
+      expect(drag.rest).toBeGreaterThanOrEqual(550)
+      expect(drag.rest).toBeLessThanOrEqual(900)
+      expect(Number.isInteger(drag.rest)).toBe(true)
     }
   })
   test('解析两端的元素、坐标和混合形式，hold 只接受严格 true', () => {
