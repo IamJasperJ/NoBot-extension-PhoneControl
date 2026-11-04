@@ -91,6 +91,20 @@ export const en = {
     'Return to the app, tap “Start accepting commands”, then go to the home screen. This page refreshes every three seconds.',
   '熄屏也要用：在 App 里点「关闭电池优化」并允许后台运行；锁屏不能设密码，或开启 Smart Lock 让手机在可信场景保持解锁。想全程黑屏操作，在 App 里选「只关屏幕面板」（需要 Shizuku 或 Root）。':
     'To use it with the screen off, tap “Turn off battery optimisation” in the app and allow background running. Use no lock screen password, or enable Smart Lock so the phone stays unlocked in trusted situations. To operate with a black screen throughout, choose “Panel off only” in the app (needs Shizuku or root).',
+  手机任务: 'Phone task',
+  '角色在绑定会话里使用手机时，这里会实时显示过程。':
+    'When the character uses the phone in the bound chat, the progress shows up here live.',
+  停止: 'Stop',
+  进行中: 'Running',
+  放弃了: 'Gave up',
+  出错了: 'Failed',
+  到时间了: 'Time limit',
+  到步数上限: 'Step limit',
+  已停止: 'Stopped',
+  '{mode} · {count} 步 · {minutes} 分钟': '{mode} · {count} steps · {minutes} min',
+  等结果: 'Waiting',
+  后台: 'Background',
+  记下的: 'Noted',
   配对成功: 'Pairing code generated',
   已撤销授权: 'Access revoked',
 }
@@ -919,6 +933,119 @@ export default function activate(api) {
     )
   }
 
+  /** @typedef {{index:number, thought:string, action:string, result:string, at:number}} TaskStep */
+  /** @typedef {{id:string, goal:string, mode:'wait'|'background', status:string, startedAt:number, endedAt?:number, steps:TaskStep[], summary?:string, memories?:string[]}} Task */
+
+  /** 操作员任务：目标、状态、最近几步（想法 → 动作 → 结果）、总结；进行中可以停止。每 3 秒刷新 */
+  function TaskCard() {
+    const [task, setTask] = useState(/** @type {Task|null} */ (null))
+    const [busy, setBusy] = useState(false)
+    useEffect(() => {
+      let live = true
+      const load = () =>
+        api
+          .fetchServer('/task')
+          .then((r) => (r.ok ? r.json() : { task: null }))
+          .then((/** @type {{task: Task|null}} */ data) => live && setTask(data.task))
+          .catch(() => {})
+      void load()
+      const timer = setInterval(() => {
+        if (!document.hidden) void load()
+      }, 3000)
+      return () => {
+        live = false
+        clearInterval(timer)
+      }
+    }, [])
+    async function stop() {
+      setBusy(true)
+      try {
+        await api.fetchServer('/task/stop', { method: 'POST' })
+        setTask((current) => (current ? { ...current, status: 'stopped' } : current))
+      } catch {
+        api.toast.error(t('请求失败'))
+      } finally {
+        setBusy(false)
+      }
+    }
+    if (!task)
+      return Card(
+        t('手机任务'),
+        null,
+        h('p', { className: 'pc-muted' }, t('角色在绑定会话里使用手机时，这里会实时显示过程。')),
+      )
+    const names = /** @type {Record<string,[string,string]>} */ ({
+      running: ['进行中', 'warn'],
+      done: ['已完成', 'good'],
+      gave_up: ['放弃了', 'bad'],
+      error: ['出错了', 'bad'],
+      time: ['到时间了', ''],
+      steps: ['到步数上限', ''],
+      stopped: ['已停止', ''],
+    })
+    const [label, tone] = names[task.status] ?? [task.status, '']
+    const minutes = Math.max(1, Math.round(((task.endedAt ?? Date.now()) - task.startedAt) / 60000))
+    const steps = task.steps.slice(-8).reverse()
+    return Card(
+      t('手机任务'),
+      task.status === 'running'
+        ? h(Button, { label: t('停止'), danger: true, disabled: busy, onClick: () => void stop() })
+        : null,
+      h(
+        'div',
+        { className: 'pc-field' },
+        h(
+          'div',
+          { className: 'pc-row between' },
+          h('strong', { className: 'pc-grow' }, task.goal),
+          h('span', { className: `pc-pill ${tone}` }, t(label)),
+        ),
+        h(
+          'span',
+          { className: 'pc-muted' },
+          t('{mode} · {count} 步 · {minutes} 分钟', {
+            mode: t(task.mode === 'wait' ? '等结果' : '后台'),
+            count: String(task.steps.length),
+            minutes: String(minutes),
+          }),
+        ),
+      ),
+      task.summary && task.status !== 'running' ? h('p', null, task.summary) : null,
+      task.memories?.length
+        ? h(
+            'div',
+            { className: 'pc-field' },
+            h('span', { className: 'pc-label' }, t('记下的')),
+            h('ul', { className: 'pc-notes' }, ...task.memories.map((m, i) => h('li', { key: i }, m))),
+          )
+        : null,
+      steps.length
+        ? h(
+            'ol',
+            { className: 'pc-log' },
+            ...steps.map((step) =>
+              h(
+                'li',
+                { key: step.index, className: 'pc-log-item' },
+                h('span', { className: 'pc-log-index' }, String(step.index)),
+                h(
+                  'div',
+                  { className: 'pc-grow' },
+                  step.thought ? h('div', { className: 'pc-log-thought' }, step.thought) : null,
+                  h(
+                    'div',
+                    { className: 'pc-log-action' },
+                    step.action,
+                    step.result === 'OK' ? null : h('span', { className: 'pc-warn' }, ` → ${step.result}`),
+                  ),
+                ),
+              ),
+            ),
+          )
+        : null,
+    )
+  }
+
   function AccessCard() {
     const [options, setOptions] = useState(/** @type {ChatOption[]|null} */ (null))
     const [saved, setSaved] = useState('')
@@ -1098,6 +1225,7 @@ export default function activate(api) {
         h(
           'div',
           { className: 'pc-col' },
+          h(TaskCard),
           h(StatusCard, {
             state,
             onRefresh: () => void controller.current?.refresh(),

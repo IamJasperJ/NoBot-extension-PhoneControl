@@ -417,3 +417,51 @@
     align-items: center;
   }
 }
+
+/* 手机任务：最近几步 */
+.pc-log {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.pc-log-item {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding-top: 8px;
+  border-top: 1px solid var(--pc-line);
+}
+.pc-log-item:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+.pc-log-index {
+  flex-shrink: 0;
+  min-width: 22px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--pc-soft);
+  border: 1px solid var(--pc-line);
+  color: var(--pc-muted);
+  font-size: 11px;
+  line-height: 18px;
+  text-align: center;
+}
+.pc-log-thought {
+  color: var(--pc-muted);
+  font-size: 12px;
+}
+.pc-log-action {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.pc-notes {
+  margin: 0;
+  padding-left: 18px;
+  list-style: disc;
+}

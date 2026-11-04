@@ -12,7 +12,7 @@ test('安装后的插件经过真实宿主完成配对与手机回报', async ()
       stdout: 'pipe',
       stderr: 'pipe',
     })
-    const timeout = setTimeout(() => child.kill(), 25000)
+    const timeout = setTimeout(() => child.kill(), 55000)
     try {
       const [out, err, code] = await Promise.all([
         new Response(child.stdout).text(),
@@ -95,6 +95,99 @@ test('安装后的插件经过真实宿主完成配对与手机回报', async ()
     result: { ok: true, code: 'OK' },
   })
   expect((await phone('result', { id: job.id, result: { ok: 'bad' } })).status).toBe(400)
+
+  // 操作员走真实宿主：会话连接 → 模型收到带编号框的截图 → 按回答操作手机 → done
+  // 宿主测试工具按运行时路径加载：它跟着宿主的类型配置走，不纳入插件的类型检查
+  const helper = '../../apps/server/test/helpers/mockLlm'
+  const { mockLlm } = (await import(helper)) as {
+    mockLlm: () => {
+      url: string
+      requests: { messages: unknown[] }[]
+      setScript(next: () => { text: string }): void
+      stop(): unknown
+    }
+  }
+  const llm = mockLlm()
+  try {
+    const { createApiPreset, setDefaultApiPreset } = await import('../../apps/server/src/services/connections')
+    setDefaultApiPreset(createApiPreset({ name: 'Operator', baseUrl: llm.url, model: 'mock-one', vision: 'yes' }).id)
+    const { createCharacter } = await import('../../apps/server/src/services/characters')
+    const { createChat } = await import('../../apps/server/src/services/chats')
+    const chat = createChat({ characterId: createCharacter({ name: '小雪', personality: '喜欢猫' }).id })
+    registry.updateExtension('phone-control', { settings: { chatId: chat.id } })
+    const replies = [
+      '{"thought":"看看推荐","action":{"type":"tap","element":1},"memory":"首页有猫"}',
+      '{"thought":"好了","action":{"type":"done","summary":"看了首页推荐。"}}',
+    ]
+    llm.setScript(() => ({ text: replies.shift() ?? '{"action":{"type":"done","summary":""}}' }))
+    const sharp = (await import('../../apps/server/node_modules/sharp')).default
+    const screenshot = (
+      await sharp({ create: { width: 540, height: 1200, channels: 3, background: '#eeeeee' } })
+        .jpeg()
+        .toBuffer()
+    ).toString('base64')
+    // 模拟手机：持续轮询并回报
+    let running = true
+    const commands: string[] = []
+    const device = (async () => {
+      while (running) {
+        const response = (await (await phone('poll', { protocol: 1, ready: true })).json()) as {
+          job: { id: string; command: { action: string } } | null
+        }
+        if (response.job) {
+          commands.push(response.job.command.action)
+          const observe = response.job.command.action === 'observe'
+          await phone('result', {
+            id: response.job.id,
+            result: {
+              ok: true,
+              code: 'OK',
+              ...(observe
+                ? {
+                    image: screenshot,
+                    data: {
+                      width: 1080,
+                      height: 2400,
+                      packageName: 'tv.danmaku.bili',
+                      nodes: [{ text: '推荐', clickable: true, bounds: [0, 200, 300, 320] }],
+                    },
+                  }
+                : {}),
+            },
+          })
+        }
+        await Bun.sleep(20)
+      }
+    })()
+    const { availableTools } = await import('../../apps/server/src/tools')
+    const task = availableTools(chat.id).find((entry) => entry.tool.name === 'phone_task')?.tool
+    expect(task).toBeDefined()
+    const result = await task!.run(
+      { goal: '看看 B 站首页', wait: true },
+      { chatId: chat.id, vars: {}, signal: new AbortController().signal },
+    )
+    running = false
+    await device
+    expect(result.content).toContain('Phone task finished')
+    expect(result.content).toContain('首页有猫')
+    expect(commands).toEqual(['observe', 'tap', 'observe'])
+    // 第一次请求：最后一条是文字 + 截图，截图已经画了编号（与手机原图不同）
+    const last = llm.requests[0]?.messages.at(-1) as {
+      content: { type: string; image_url?: { url: string } }[]
+    }
+    expect(last.content.map((part) => part.type)).toEqual(['text', 'image_url'])
+    expect(last.content[1]?.image_url?.url.startsWith('data:image/')).toBe(true)
+    const status = (await (await app.request('/api/ext/phone-control/task')).json()) as {
+      task: { status: string; steps: unknown[] }
+      memories: { summary: string }[]
+    }
+    expect(status.task.status).toBe('done')
+    expect(status.task.steps.length).toBe(2)
+    expect(status.memories[0]?.summary).toBe('看了首页推荐。')
+  } finally {
+    llm.stop()
+  }
+
   registry.updateExtension('phone-control', { enabled: false })
   expect((await phone('poll', { protocol: 1, ready: true })).status).toBe(404)
-}, 30000)
+}, 60000)

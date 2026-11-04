@@ -81,6 +81,8 @@ Content-Type: application/json
 | `POST /pair` | 创建一组新凭据，替换旧设备 |
 | `POST /revoke` | 删除设备与当前指令 |
 | `GET /status` | 配对、在线、就绪状态及当前指令摘要，不返回密钥和截图 |
+| `GET /task` | `{ task, memories }`：当前或上一次手机任务（目标、状态、最近 40 步）和近期记忆 |
+| `POST /task/stop` | 停止正在进行的手机任务 |
 | `GET /addresses` | `{ addresses: string[] }`，本机内网 / VPN IPv4，用于推荐手机入口 |
 | `POST /commands` | 请求体为动作，202 返回 `{ id }`；忙碌/离线 409 |
 | `GET /commands/:id` | `{ result: null }` 或结果；未知/过期/取消 409 |
@@ -93,10 +95,13 @@ Content-Type: application/json
 | action | 额外字段 | 说明 |
 | --- | --- | --- |
 | `observe` | 无 | 界面节点 + 截图，无法截图时返回明确错误 |
-| `tap` | x, y | 数值，范围 0–1 |
-| `swipe` | x, y, endX, endY, duration? | 坐标 0–1；duration 整数毫秒 100–2000，默认 500 |
+| `tap` | x, y, duration? | 坐标 0–1；duration 按下毫秒 40–400，默认 80 |
+| `longpress` | x, y, duration? | duration 400–2000，默认 700（App 0.5.0 起） |
+| `swipe` | x, y, endX, endY, duration?, points? | 坐标 0–1；duration 整数毫秒 100–2000，默认 500；points 是最多 16 个途经点 `[x, y]`，旧版 App 忽略、走直线 |
 | `type` | text | 1–2000 字符，替换聚焦可编辑输入框文字 |
 | `open` | packageName | Android 包名，最长 200 字符 |
+| `enter` | 无 | 对聚焦输入框按输入法的回车 / 搜索 / 发送（App 0.5.0 起） |
+| `apps` | 无 | 返回 `data.apps: [{ label, packageName }]`，桌面上能打开的应用，最多 300 个（App 0.5.0 起） |
 | `back` | 无 | 系统返回 |
 | `home` | 无 | 系统主页 |
 | `recents` | 无 | 系统最近任务 |
@@ -114,3 +119,5 @@ cancelled    超时：结果未知
 ```
 
 过期条目不能再次交付，旧回报不能覆盖新指令。服务器重启后读取持久化状态，不把 `delivered` 重置为 `queued`。
+
+旧版 App 收到 `longpress` / `enter` / `apps` 会回报 `UNSUPPORTED_ACTION`，操作员据此改用别的办法（比如点搜索按钮、回桌面点图标）。
