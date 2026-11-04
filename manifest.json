@@ -8,6 +8,7 @@
     "server": true,
     "routes": true,
     "tools": true,
+    "hooks": true,
     "network": [],
     "client": true
   },
