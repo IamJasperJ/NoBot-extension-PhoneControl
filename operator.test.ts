@@ -1,5 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import {
+  blockedApp,
+  blockedWord,
+  elementAt,
   type Goal,
   humanScroll,
   humanTap,
@@ -9,6 +12,8 @@ import {
   pointIn,
   readScreen,
   runOperator,
+  STRICT_POLICY,
+  systemPrompt,
 } from './operator'
 import type { Command, Result } from './protocol'
 
@@ -251,5 +256,118 @@ describe('操作员主循环', () => {
     }
     const report = await runOperator(goal(), f.p, controller.signal)
     expect(report.endReason).toBe('stopped')
+  })
+})
+
+describe('操作限制', () => {
+  test('按钮文字命中禁止类别才拦；长句里碰巧出现不算；放开后不拦；自定义词也拦', () => {
+    expect(blockedWord('立即支付', STRICT_POLICY)).toBe('支付')
+    expect(blockedWord('发送', STRICT_POLICY)).toBe('发送')
+    expect(blockedWord('点赞 1.2万', STRICT_POLICY)).toBe('点赞')
+    expect(blockedWord('Follow', STRICT_POLICY)).toBe('follow')
+    expect(blockedWord('这个视频值得点赞的地方真的很多很多', STRICT_POLICY)).toBeNull()
+    expect(blockedWord('推荐', STRICT_POLICY)).toBeNull()
+    const relaxed = { allowed: ['like' as const], blockedApps: [], blockedWords: ['抽奖'] }
+    expect(blockedWord('点赞', relaxed)).toBeNull()
+    expect(blockedWord('发送', relaxed)).toBe('发送')
+    expect(blockedWord('参与抽奖', relaxed)).toBe('抽奖')
+  })
+  test('禁止的应用：主人列的（名称或包名），以及不允许改设置时的设置应用', () => {
+    const policy = { allowed: [], blockedApps: ['支付宝', 'com.tencent.mm'], blockedWords: [] }
+    expect(blockedApp({ label: '支付宝', packageName: 'com.eg.android.AlipayGphone' }, policy)).toBe(true)
+    expect(blockedApp({ packageName: 'com.tencent.mm' }, policy)).toBe(true)
+    expect(blockedApp({ packageName: 'com.android.settings' }, policy)).toBe(true)
+    expect(blockedApp({ packageName: 'com.android.settings' }, { ...policy, allowed: ['system'] })).toBe(false)
+    expect(blockedApp({ label: '哔哩哔哩', packageName: 'tv.danmaku.bili' }, policy)).toBe(false)
+  })
+  test('按坐标找元素：取最里层的', () => {
+    const screen = readScreen({
+      width: 1000,
+      height: 1000,
+      nodes: [
+        { text: '卡片', clickable: true, bounds: [0, 0, 1000, 500] },
+        { text: '发送', clickable: true, bounds: [800, 400, 1000, 500] },
+      ],
+    })
+    expect(elementAt(screen, { x: 0.9, y: 0.45 })?.label).toBe('发送')
+    expect(elementAt(screen, { x: 0.1, y: 0.1 })?.label).toBe('卡片')
+    expect(elementAt(screen, { x: 0.5, y: 0.9 })).toBeUndefined()
+  })
+  test('提示词按设置写出允许和禁止的操作', () => {
+    const prompt = systemPrompt({ ...goal(), policy: { allowed: ['like'], blockedApps: ['支付宝'], blockedWords: [] } })
+    expect(prompt).toContain('allows you to like, favorite or follow')
+    expect(prompt).toContain('forbids these and the phone will refuse them: send messages')
+    expect(prompt).toContain('Never open these apps: 支付宝')
+    expect(prompt).toContain('Never enter passwords')
+  })
+  test('主循环：点禁止的按钮、聊天框回车、打开禁止的应用都不执行，并把原因告诉模型', async () => {
+    const nodes = [
+      { text: '立即支付', clickable: true, bounds: [0, 100, 500, 200] },
+      { text: '说点什么', clickable: true, editable: true, bounds: [0, 300, 1000, 400] },
+      { text: '搜索', clickable: true, editable: true, bounds: [0, 500, 1000, 600] },
+    ]
+    const f = ports(
+      [
+        '{"action":{"type":"tap","element":1}}',
+        '{"action":{"type":"tap","x":0.2,"y":0.075}}',
+        '{"action":{"type":"type","element":2,"text":"你好","submit":true}}',
+        '{"action":{"type":"type","element":3,"text":"猫","submit":true}}',
+        '{"action":{"type":"open_app","name":"支付宝"}}',
+        '{"action":{"type":"done","summary":"x"}}',
+      ],
+      (command) =>
+        command.action === 'apps'
+          ? { ok: true, code: 'OK', data: { apps: [{ label: '支付宝', packageName: 'com.eg.android.AlipayGphone' }] } }
+          : { ok: true, code: 'OK' },
+    )
+    const inner = f.p.act
+    f.p.act = async (command) => {
+      if (command.action !== 'observe') return inner(command)
+      f.commands.push(command)
+      return {
+        ok: true,
+        code: 'OK',
+        data: { width: 1000, height: 2000, packageName: 'com.shop', nodes },
+        image: '/9j/2Q==',
+      }
+    }
+    const report = await runOperator(
+      { ...goal(), policy: { allowed: [], blockedApps: ['支付宝'], blockedWords: [] } },
+      f.p,
+      new AbortController().signal,
+    )
+    const results = report.steps.map((s) => s.result)
+    expect(results[0]).toBe('blocked by the owner\'s settings ("支付")')
+    expect(results[1]).toBe('blocked by the owner\'s settings ("支付")')
+    expect(results[2]).toContain('pressing enter was blocked')
+    expect(results[3]).toStartWith('OK')
+    expect(results[4]).toBe('"支付宝" is blocked by the owner\'s settings')
+    const acted = f.commands.map((c) => c.action).filter((a) => a !== 'observe')
+    // 只执行了：点聊天框、输入、点搜索框、输入、回车、列应用；没有点支付、没有打开支付宝
+    expect(acted).toEqual(['tap', 'type', 'tap', 'type', 'enter', 'apps'])
+  })
+  test('误入禁止的应用：除了返回和回桌面都不执行，提示里说明', async () => {
+    const f = ports([
+      '{"action":{"type":"scroll"}}',
+      '{"action":{"type":"back"}}',
+      '{"action":{"type":"done","summary":"x"}}',
+    ])
+    const inner = f.p.act
+    f.p.act = async (command) => {
+      if (command.action === 'observe') {
+        f.commands.push(command)
+        return {
+          ok: true,
+          code: 'OK',
+          data: { ...screenData(), packageName: 'com.android.settings' },
+          image: '/9j/2Q==',
+        }
+      }
+      return inner(command)
+    }
+    const report = await runOperator(goal(), f.p, new AbortController().signal)
+    expect(report.steps[0]?.result).toContain('this app is blocked')
+    expect(report.steps[1]?.result).toStartWith('OK')
+    expect(f.prompts[0]).toContain("This app is blocked by the owner's settings")
   })
 })

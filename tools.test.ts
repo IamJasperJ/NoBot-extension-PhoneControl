@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, test } from 'bun:test'
 import type { ExtensionContext } from '../../apps/server/src/extensions/types'
 import { Bridge } from './bridge'
-import { currentTask, memoryPrompt, recentMemories, stopAll, timing } from './tasks'
+import { currentTask, memoryPrompt, policyOf, recentMemories, settingsOf, stopAll, timing } from './tasks'
 import { phoneTools } from './tools'
 
 function context(
@@ -208,4 +208,18 @@ describe('模型工具', () => {
       stop()
     }
   })
+})
+
+test('设置转换成操作限制：默认全部禁止；名单按换行或逗号分隔', () => {
+  expect(policyOf(settingsOf({}))).toEqual({ allowed: [], blockedApps: [], blockedWords: [] })
+  expect(
+    policyOf(
+      settingsOf({
+        allowLike: true,
+        allowSystem: true,
+        blockedApps: '支付宝\n com.tencent.mm ,',
+        blockedWords: '抽奖，红包',
+      }),
+    ),
+  ).toEqual({ allowed: ['like', 'system'], blockedApps: ['支付宝', 'com.tencent.mm'], blockedWords: ['抽奖', '红包'] })
 })

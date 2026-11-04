@@ -2,7 +2,7 @@ import type { ExtensionContext, ExtensionStorage } from '../../apps/server/src/e
 import { Bridge } from './bridge'
 import { delay, runCommand } from './commands'
 import { markScreenshot } from './marks'
-import { type EndReason, type Report, runOperator, type Step } from './operator'
+import { type EndReason, type Permission, type Policy, type Report, runOperator, type Step } from './operator'
 
 /** 插件设置（已合并默认值、限定范围） */
 export interface PhoneSettings {
@@ -12,6 +12,15 @@ export interface PhoneSettings {
   maxSteps: number
   maxMinutes: number
   directTool: boolean
+  allowLike: boolean
+  allowPost: boolean
+  allowPurchase: boolean
+  allowDelete: boolean
+  allowSystem: boolean
+  /** 每行一个应用名称或包名 */
+  blockedApps: string
+  /** 每行一个不许点的按钮文字 */
+  blockedWords: string
 }
 
 export const DEFAULT_SETTINGS: PhoneSettings = {
@@ -21,6 +30,13 @@ export const DEFAULT_SETTINGS: PhoneSettings = {
   maxSteps: 60,
   maxMinutes: 8,
   directTool: false,
+  allowLike: false,
+  allowPost: false,
+  allowPurchase: false,
+  allowDelete: false,
+  allowSystem: false,
+  blockedApps: '',
+  blockedWords: '',
 }
 
 const range = (v: unknown, min: number, max: number, fallback: number) =>
@@ -35,7 +51,32 @@ export function settingsOf(raw: Record<string, unknown>): PhoneSettings {
     maxSteps: range(raw.maxSteps, 5, 200, DEFAULT_SETTINGS.maxSteps),
     maxMinutes: range(raw.maxMinutes, 1, 30, DEFAULT_SETTINGS.maxMinutes),
     directTool: raw.directTool === true,
+    allowLike: raw.allowLike === true,
+    allowPost: raw.allowPost === true,
+    allowPurchase: raw.allowPurchase === true,
+    allowDelete: raw.allowDelete === true,
+    allowSystem: raw.allowSystem === true,
+    blockedApps: typeof raw.blockedApps === 'string' ? raw.blockedApps : '',
+    blockedWords: typeof raw.blockedWords === 'string' ? raw.blockedWords : '',
   }
+}
+
+const lines = (text: string) =>
+  text
+    .split(/[\n,，]/)
+    .map((v) => v.trim())
+    .filter(Boolean)
+    .slice(0, 100)
+
+/** 设置 → 操作员的限制策略 */
+export function policyOf(settings: PhoneSettings): Policy {
+  const allowed: Permission[] = []
+  if (settings.allowLike) allowed.push('like')
+  if (settings.allowPost) allowed.push('post')
+  if (settings.allowPurchase) allowed.push('purchase')
+  if (settings.allowDelete) allowed.push('delete')
+  if (settings.allowSystem) allowed.push('system')
+  return { allowed, blockedApps: lines(settings.blockedApps), blockedWords: lines(settings.blockedWords) }
 }
 
 /** 界面上显示的任务状态（存进扩展存储，路由和工具共用） */
@@ -148,6 +189,7 @@ export function startTask(
       persona,
       maxSteps: settings.maxSteps,
       maxMs: input.minutes * 60_000,
+      policy: policyOf(settings),
     },
     {
       act: (command) => runCommand(bridge, command, controller.signal),
