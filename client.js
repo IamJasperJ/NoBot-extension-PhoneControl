@@ -537,7 +537,8 @@ export async function loadChatOptions(api) {
 
 // ───────── 配对状态 ─────────
 
-/** @typedef {{paired:boolean, deviceId?:string, online:boolean, ready:boolean, lastSeen:number|null, job:{id:string,state:string}|null}} Status */
+/** @typedef {{paired:boolean, deviceId?:string, online:boolean, ready:boolean, lastSeen:number|null, job:{id:string,state:string}|null, disconnects?:Disconnect[]}} Status */
+/** @typedef {{at:number, gapMs:number, cause:string, appOfflineMs?:number, error?:string}} Disconnect */
 /** @typedef {{deviceId:string,token:string,protocol:number}} Pair */
 /** @typedef {{status:Status|null, pair:Pair|null, handle:string, busy:boolean, error:string}} State */
 /**
@@ -869,7 +870,6 @@ export default function activate(api) {
     )
   }
 
-  /** @param {{state:State, onRefresh:()=>void, onConfirm:(action:'pair'|'revoke')=>void}} props */
   /** 断线原因（App 0.5.5 起上报；旧版 App 只有服务端看到的间隔，原因未知） */
   const CAUSES = /** @type {Record<string,string>} */ ({
     frozen: 'App 被系统冻结',
@@ -879,7 +879,7 @@ export default function activate(api) {
     unknown: '原因未知',
   })
 
-  /** 最近断线：恢复时间 · 断了多久（服务端看到的间隔）· 原因 */
+  /** 最近断线：恢复时间 · 断了多久（服务端看到的间隔）· 原因 @param {{list:Disconnect[]}} props */
   function Disconnects({ list }) {
     const frozen = list.some((d) => d.cause === 'frozen')
     return h(
@@ -892,14 +892,14 @@ export default function activate(api) {
         ...list.map((d) =>
           h(
             'li',
-            { key: d.at, className: 'pc-log-item' },
+            { key: String(d.at), className: 'pc-log-item' },
             h(
               'div',
               null,
               h(
                 'div',
                 { className: 'pc-log-action' },
-                `${new Date(d.at).toLocaleString()} · ${t('{minutes} 分钟', { minutes: Math.max(1, Math.round(d.gapMs / 60000)) })}`,
+                `${new Date(d.at).toLocaleString()} · ${t('{minutes} 分钟', { minutes: String(Math.max(1, Math.round(d.gapMs / 60000))) })}`,
               ),
               h(
                 'div',
@@ -920,6 +920,7 @@ export default function activate(api) {
     )
   }
 
+  /** @param {{state:State, onRefresh:()=>void, onConfirm:(action:'pair'|'revoke')=>void}} props */
   function StatusCard({ state, onRefresh, onConfirm }) {
     const [confirm, setConfirm] = useState(/** @type {'pair'|'revoke'|null} */ (null))
     const status = state.status
