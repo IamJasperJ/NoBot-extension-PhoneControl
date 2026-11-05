@@ -615,7 +615,18 @@ export function parseDecision(text: string): Decision {
 // ───────── 主循环 ─────────
 
 /** 手机端回报的失败码中，这些说明现在没法继续，直接结束 */
-const BLOCKING = new Set(['DEVICE_LOCKED', 'SCREEN_OFF'])
+const SCREEN_FAILURES: Record<string, string> = {
+  DEVICE_LOCKED:
+    'The phone reported a lock screen that could not be dismissed. This does not necessarily mean a password is configured.',
+  SCREEN_OFF: 'Automatic waking is disabled on the phone. Enable it in the companion app or wake the phone manually.',
+  WAKE_DISABLED:
+    'Automatic unlocking is disabled in the companion app. Enable automatic waking or dismiss the lock screen manually.',
+  WAKE_FAILED:
+    'The phone did not wake up. Check the companion app’s background pop-up and lock-screen display permissions, or wake the phone manually. This is not a password error.',
+  UNLOCK_FAILED:
+    'The screen is on, but the lock screen could not be dismissed. Swipe to unlock manually; this does not necessarily mean a password is configured.',
+}
+const BLOCKING = new Set(Object.keys(SCREEN_FAILURES))
 
 export async function runOperator(goal: Goal, ports: OperatorPorts, signal: AbortSignal): Promise<Report> {
   const started = ports.now()
@@ -667,7 +678,7 @@ export async function runOperator(goal: Goal, ports: OperatorPorts, signal: Abor
       if (!observed.ok) {
         if (BLOCKING.has(observed.code)) {
           endReason = 'gave_up'
-          summary = observed.code === 'DEVICE_LOCKED' ? 'The phone is locked.' : 'The phone screen is off.'
+          summary = SCREEN_FAILURES[observed.code]!
           break
         }
         if (observed.code === 'CONTROL_APP_VISIBLE') {

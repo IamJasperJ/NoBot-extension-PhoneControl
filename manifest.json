@@ -2,7 +2,7 @@
   "id": "phone-control",
   "name": "手机控制 / Phone Control",
   "description": "安卓手机控制底层 / Android phone control bridge",
-  "version": "0.5.6",
+  "version": "0.5.7",
   "server": "server.ts",
   "permissions": {
     "server": true,

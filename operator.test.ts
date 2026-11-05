@@ -231,6 +231,25 @@ describe('操作员主循环', () => {
     expect(f.commands.length).toBe(1)
   })
 
+  test('未亮屏、滑动锁屏和关闭自动唤醒分别解释，不误称密码锁定', async () => {
+    for (const [code, description] of [
+      ['WAKE_FAILED', 'did not wake up'],
+      ['UNLOCK_FAILED', 'Swipe to unlock'],
+      ['WAKE_DISABLED', 'Automatic unlocking is disabled'],
+      ['SCREEN_OFF', 'Automatic waking is disabled'],
+    ]) {
+      const f = ports([])
+      f.p.act = async (command) => {
+        f.commands.push(command)
+        return { ok: false, code: code! }
+      }
+      const report = await runOperator(goal(), f.p, new AbortController().signal)
+      expect(report.endReason).toBe('gave_up')
+      expect(report.summary).toContain(description!)
+      expect(f.commands.length).toBe(1)
+    }
+  })
+
   test('打开应用：先列出已安装应用再按名字匹配；找不到时把已安装列表告诉模型', async () => {
     const f = ports(
       [

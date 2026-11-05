@@ -123,3 +123,10 @@
 - 新增 PanelSessionTest 4 项，覆盖新任务请求、同轮手动解除保持、下一轮恢复、模式切换、手动重新开启。Android 共 21 项单元测试通过；Java 编译、APK 构建及 Lint 通过（No issues found）。编译器仍有 Shizuku 依赖注解缺失和旧 API 警告。
 - 插件 75 项测试通过；补充任务 ID 随指令传递的测试，操作员全流程确认同轮共享 ID、下一轮更换 ID。修改后的工具测试单独复跑 9 项通过。TypeScript 类型检查、修改的 TS/JSON 文件 Biome 检查通过。
 - 未连接真实设备；电源键解除、密码锁屏、厂商系统的面板保持和恢复仍需真机验收。服务端和 APK 需一起升级，旧服务端无法传递完整任务边界。未安装或部署到用户设备。
+
+## 0.5.7 无密码熄屏唤醒（2026-11-05）
+
+- 用户反馈取消密码后任务仍回报锁定，且手机完全没有亮屏。代码检查发现 UnlockActivity 在没有 keyguard 时于 onCreate 直接 finish，可能早于 setTurnScreenOn 生效；旧代码同时把启动失败、未亮屏、锁屏未解除和本应用仍在前台统一报为 DEVICE_LOCKED。此判断来自代码检查，未用真机复现。
+- 唤醒页面改为 onResume 后检查实际交互状态，窗口获得焦点后请求解除无密码锁屏；退出保护 4 秒，服务等待 5 秒，分别回报 WAKE_FAILED / UNLOCK_FAILED / WAKE_DISABLED / CONTROL_APP_VISIBLE。只有设备配置安全凭据且仍锁定时才按凭据锁定处理。服务端按不同错误说明，不推断用户仍设置了密码。
+- 插件 76 项测试、Android 24 项单元测试通过，涵盖无密码但未亮屏时不能提前结束、信任解锁、唤醒失败分类、服务端遇到相应错误时停止并说明。TypeScript、Biome、APK 构建及 Android Lint 通过，Lint 为 No issues found。Java 编译仍有现有依赖注解和旧 API 警告。
+- 无 ADB 真机连接；Activity 生命周期的实际亮屏、厂商后台弹窗限制、无密码滑动解锁仍需用户手机验证。没有部署到服务器或手机。

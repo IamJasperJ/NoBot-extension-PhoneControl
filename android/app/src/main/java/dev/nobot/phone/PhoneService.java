@@ -353,9 +353,10 @@ public class PhoneService extends AccessibilityService {
     }));
     PowerManager power = getSystemService(PowerManager.class);
     KeyguardManager keyguard = getSystemService(KeyguardManager.class);
-    switch (Screen.decide(power.isInteractive(), keyguard.isKeyguardLocked(), keyguard.isDeviceLocked(), prefs.getBoolean("wake", true))) {
+    switch (Screen.decide(power.isInteractive(), keyguard.isKeyguardLocked(), keyguard.isDeviceLocked(), keyguard.isDeviceSecure(), prefs.getBoolean("wake", true))) {
       case RUN: preparePanel(() -> run(command, future), future); return;
       case LOCKED: future.complete(result(false, "DEVICE_LOCKED")); return;
+      case WAKE_DISABLED: future.complete(result(false, "WAKE_DISABLED")); return;
       case SCREEN_OFF: future.complete(result(false, "SCREEN_OFF")); return;
       default:
     }
@@ -363,17 +364,23 @@ public class PhoneService extends AccessibilityService {
     if (!screen.isHeld()) screen.acquire(RELOCK_DELAY * 4);
     try {
       startActivity(new Intent(this, UnlockActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NO_ANIMATION));
-    } catch (Exception e) { future.complete(result(false, "DEVICE_LOCKED")); return; }
-    long until = SystemClock.elapsedRealtime() + 3000;
+    } catch (Exception e) { future.complete(result(false, "WAKE_FAILED")); return; }
+    // 留出唤醒页面四秒的窗口和退出动画时间，仍低于单条指令的十秒等待上限。
+    long until = SystemClock.elapsedRealtime() + 5000;
+    long wakeEpoch = prefs.getLong("epoch", 0);
     main.post(new Runnable() {
       @Override public void run() {
         if (future.isDone()) return;
+        if (!enabled() || wakeEpoch != prefs.getLong("epoch", 0)) {
+          future.complete(result(false, "CANCELLED")); return;
+        }
         AccessibilityNodeInfo root = getRootInActiveWindow();
         boolean ours = root != null && getPackageName().contentEquals(root.getPackageName());
         if (power.isInteractive() && !keyguard.isKeyguardLocked() && !ours) {
           // 已经亮屏和刚解锁走同一入口，黑屏意图不再依赖是谁唤醒手机。
           main.postDelayed(() -> preparePanel(() -> PhoneService.this.run(command, future), future), 400);
-        } else if (SystemClock.elapsedRealtime() > until) future.complete(result(false, "DEVICE_LOCKED"));
+        } else if (SystemClock.elapsedRealtime() > until) future.complete(result(false,
+          Screen.wakeFailure(power.isInteractive(), keyguard.isKeyguardLocked(), keyguard.isDeviceLocked(), keyguard.isDeviceSecure(), ours)));
         else main.postDelayed(this, 100);
       }
     });
@@ -419,8 +426,9 @@ public class PhoneService extends AccessibilityService {
 
   private void run(JSONObject command, CompletableFuture<JSONObject> future) {
     try {
-      if (getSystemService(KeyguardManager.class).isKeyguardLocked()) {
-        future.complete(result(false, "DEVICE_LOCKED")); return;
+      KeyguardManager keyguard = getSystemService(KeyguardManager.class);
+      if (keyguard.isKeyguardLocked()) {
+        future.complete(result(false, keyguard.isDeviceLocked() && keyguard.isDeviceSecure() ? "DEVICE_LOCKED" : "UNLOCK_FAILED")); return;
       }
       String action = command.getString("action");
       switch (action) {

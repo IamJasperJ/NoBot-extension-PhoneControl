@@ -11,7 +11,7 @@ export default {
   id: 'phone-control',
   name: t('手机控制'),
   description: t('通过安卓伴侣连接并控制手机'),
-  version: '0.5.6',
+  version: '0.5.7',
   defaultSettings: { ...DEFAULT_SETTINGS },
   settingsSchema: [
     { key: 'chatId', type: 'string', label: t('允许使用手机的会话 ID'), hint: t('留空时不向模型提供手机工具') },
