@@ -1,0 +1,115 @@
+# 推送和 PR：跑插件测试、类型检查和安卓构建。
+# 推送 v* 标签（如 v0.5.7）：再核对版本号，用固定密钥签名 APK，自动创建 GitHub Release。
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  plugin:
+    name: Plugin tests
+    runs-on: ubuntu-latest
+    steps:
+      # 插件的类型和测试依赖 NoBot 宿主源码，所以把本仓库放进 NoBot 的 external-extension/ 下运行
+      - uses: actions/checkout@v4
+        with:
+          repository: IamJasperJ/NoBot
+          path: nobot
+      - uses: actions/checkout@v4
+        with:
+          path: nobot/external-extension/phone-control
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.3
+      - name: Install NoBot dependencies
+        working-directory: nobot
+        run: bun install --frozen-lockfile
+      - name: Test
+        working-directory: nobot
+        env:
+          MOCK_LLM_FETCH: '1'
+          EXT2_FETCH_MOCK: '1'
+          IMG3_FETCH_MOCK: '1'
+          BACKGROUND_FETCH_MOCK: '1'
+        run: bun test external-extension/phone-control
+      - name: Typecheck
+        working-directory: nobot
+        run: |
+          bunx tsc --noEmit -p external-extension/phone-control
+          bunx tsc --noEmit -p external-extension/phone-control/tsconfig.client.json
+
+  android:
+    name: Android app
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check versions match the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          manifest=$(jq -r .version manifest.json)
+          app=$(sed -nE "s/.*versionName '([^']+)'.*/\1/p" android/app/build.gradle)
+          echo "tag=$tag manifest=$manifest app=$app"
+          [ "$tag" = "$manifest" ] && [ "$tag" = "$app" ] || { echo "::error::标签、manifest.json 和 versionName 的版本号必须一致"; exit 1; }
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Prepare signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.NOBOT_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/nobot.keystore"
+            echo "NOBOT_KEYSTORE_FILE=$RUNNER_TEMP/nobot.keystore" >> "$GITHUB_ENV"
+          elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            # 每次临时生成的调试密钥都不同，用户没法覆盖升级，所以发版必须配好固定密钥
+            echo "::error::发版需要在仓库 Secrets 里配置 NOBOT_KEYSTORE_BASE64 等签名密钥（见 README）"; exit 1
+          fi
+      - name: Build, test and lint
+        working-directory: android
+        env:
+          NOBOT_KEYSTORE_PASSWORD: ${{ secrets.NOBOT_KEYSTORE_PASSWORD }}
+          NOBOT_KEY_ALIAS: ${{ secrets.NOBOT_KEY_ALIAS }}
+          NOBOT_KEY_PASSWORD: ${{ secrets.NOBOT_KEY_PASSWORD }}
+        run: ./gradlew --no-daemon testDebugUnitTest lintDebug assembleDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+  release:
+    name: GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [plugin, android]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: apk
+          path: build
+      - name: Package
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p out
+          cp build/app-debug.apk "out/nobot-phone-$version.apk"
+          # 插件包只放服务端和网页运行需要的文件，解压到 extensions/ 下即可使用
+          git archive --format=zip --prefix=phone-control/ -o "out/phone-control-$version.zip" HEAD -- . \
+            ':!android' ':!docs' ':!.github' ':!*.test.ts' ':!*.test.js' ':!tsconfig*.json' ':!.gitignore'
+          (cd out && sha256sum * > SHA256SUMS.txt)
+          ls -la out
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" out/* --title "Phone Control ${GITHUB_REF_NAME}" --generate-notes --verify-tag
