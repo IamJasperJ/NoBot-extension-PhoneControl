@@ -65,7 +65,7 @@ On NoBot's Extensions page, click Install and enter:
 https://github.com/IamJasperJ/NoBot-extension-PhoneControl.git
 ```
 
-To pin a version, enter a tag such as `v0.5.7` as the branch / tag. You can check for updates later from the extension's details.
+To pin a version, enter a tag such as `v0.5.8` as the branch / tag. You can check for updates later from the extension's details.
 
 **Option B: download the package**
 
@@ -78,6 +78,8 @@ After installing, approve the requested permissions (server, routes, tools, hook
 Requires **Android 11** or later. Download `nobot-phone-<version>.apk` from [Releases](https://github.com/IamJasperJ/NoBot-extension-PhoneControl/releases) and install it.
 
 The app and the extension share version numbers; update both together. All releases are signed with the same key, so you can install over the old version and keep the permissions you granted.
+
+The app checks for updates on its own (when you open it, at most every 6 hours), or tap Check for updates next to the version. When a new version shows up, tap Download and install: the app downloads the APK from Releases, verifies it against `SHA256SUMS.txt` and hands it to the system installer. The first time you need to allow it to install unknown apps and confirm the system dialog; on Android 12 and later, later updates usually need no confirmation. The phone must be able to reach GitHub.
 
 ### 3. Network
 

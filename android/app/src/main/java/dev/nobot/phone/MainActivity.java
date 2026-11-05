@@ -42,9 +42,9 @@ import rikka.shizuku.Shizuku;
 public class MainActivity extends Activity {
   private SharedPreferences prefs;
   private EditText url, device, token;
-  private TextView status, server, panelStatus, shizukuStatus, outages;
-  private Button toggle;
-  private View manual, panelSection;
+  private TextView status, server, panelStatus, shizukuStatus, outages, updateLink, updateTitle, updateText;
+  private Button toggle, updateButton;
+  private View manual, panelSection, updateCard;
   /** 准备工作清单里的状态行，每秒刷新 */
   private Check accessibility, battery, notifications;
   private final Shizuku.OnRequestPermissionResultListener shizukuResult = (code, result) ->
@@ -69,9 +69,39 @@ public class MainActivity extends Activity {
     TextView title = text(R.string.app_name, 22, R.color.text);
     title.setTypeface(Typeface.DEFAULT_BOLD);
     page.addView(title);
+    LinearLayout top = new LinearLayout(this);
+    top.setOrientation(LinearLayout.HORIZONTAL);
+    top.setGravity(Gravity.CENTER_VERTICAL);
     TextView version = text(0, 13, R.color.muted);
     version.setText(getString(R.string.version, BuildConfig.VERSION_NAME));
-    page.addView(version, margins(0, dp(2), 0, dp(16)));
+    top.addView(version, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+    updateLink = text(R.string.update_check, 13, R.color.accent);
+    updateLink.setPadding(dp(10), dp(8), dp(4), dp(8));
+    updateLink.setBackground(ripple(null));
+    updateLink.setOnClickListener(view -> checkUpdate(true));
+    top.addView(updateLink);
+    page.addView(top, margins(0, 0, 0, dp(10)));
+
+    // 新版本：检查到 GitHub 上有更新的发行版时才显示
+    LinearLayout update = card(page);
+    updateCard = update;
+    updateTitle = text(0, 15, R.color.text);
+    updateTitle.setTypeface(Typeface.DEFAULT_BOLD);
+    update.addView(updateTitle);
+    updateText = text(0, 13, R.color.muted);
+    update.addView(updateText, margins(0, dp(4), 0, dp(8)));
+    LinearLayout updateActions = new LinearLayout(this);
+    updateActions.setOrientation(LinearLayout.HORIZONTAL);
+    update.addView(updateActions);
+    updateButton = button(updateActions, R.string.update_install, true, this::installUpdate);
+    Button notes = button(updateActions, R.string.update_notes, false, () -> {
+      Updater.Release release = Updater.release;
+      String address = release != null && release.page.startsWith("https://") ? release.page : "https://github.com/" + Updater.REPO + "/releases";
+      startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(address)));
+    });
+    updateButton.setLayoutParams(weight(0, dp(4)));
+    notes.setLayoutParams(weight(dp(4), 0));
+    update.setVisibility(View.GONE);
 
     // 状态卡
     LinearLayout hero = card(page);
@@ -198,6 +228,66 @@ public class MainActivity extends Activity {
     panelStatus.setText(prefs.getInt("panelStatus", R.string.panel_idle));
     shizukuStatus.setText(shizukuState());
     outages.setText(outageText(prefs.getString("outages", "[]")));
+    renderUpdate();
+  }
+
+  /** 检查更新的状态：链接文字、新版本卡片；安装器要确认时在前台打开确认界面 */
+  private void renderUpdate() {
+    Updater.Phase phase = Updater.phase;
+    Updater.Release release = Updater.release;
+    updateLink.setText(phase == Updater.Phase.CHECKING ? R.string.update_checking : R.string.update_check);
+    boolean show = release != null && (phase == Updater.Phase.AVAILABLE || phase == Updater.Phase.DOWNLOADING
+      || phase == Updater.Phase.INSTALLING || phase == Updater.Phase.FAILED);
+    updateCard.setVisibility(show ? View.VISIBLE : View.GONE);
+    if (!show) return;
+    updateTitle.setText(getString(R.string.update_available, release.version));
+    updateButton.setEnabled(phase == Updater.Phase.AVAILABLE || phase == Updater.Phase.FAILED);
+    updateButton.setText(phase == Updater.Phase.FAILED ? R.string.update_retry : R.string.update_install);
+    switch (phase) {
+      case DOWNLOADING -> updateText.setText(getString(R.string.update_downloading, Updater.progress));
+      case INSTALLING -> updateText.setText(R.string.update_installing);
+      case FAILED -> updateText.setText(failureText());
+      default -> updateText.setText(getString(R.string.update_hint, BuildConfig.VERSION_NAME));
+    }
+    updateText.setTextColor(getColor(phase == Updater.Phase.FAILED ? R.color.bad : R.color.muted));
+    Intent confirm = Updater.confirm;
+    if (confirm != null) {
+      Updater.confirm = null;
+      try { startActivity(confirm); }
+      catch (Exception e) { Updater.fail(release, R.string.update_failed_install, e.getClass().getSimpleName()); }
+    }
+  }
+
+  private String failureText() {
+    String detail = Updater.detail;
+    return getString(Updater.error, detail.isEmpty() ? getString(R.string.cause_unknown) : detail);
+  }
+
+  /** 手动检查时提示结果；自动检查只在有新版本时显示卡片 */
+  private void checkUpdate(boolean manual) {
+    if (Updater.busy()) return;
+    Updater.check(this, () -> runOnUiThread(() -> {
+      if (isDestroyed()) return;
+      render();
+      if (!manual) return;
+      if (Updater.phase == Updater.Phase.LATEST) toast(R.string.update_latest);
+      else if (Updater.phase == Updater.Phase.FAILED && Updater.release == null)
+        Toast.makeText(this, failureText(), Toast.LENGTH_LONG).show();
+    }));
+    render();
+  }
+
+  /** 第一次更新要先在系统设置里允许本 App 安装应用 */
+  private void installUpdate() {
+    if (Updater.phase == Updater.Phase.FAILED && Updater.release == null) { checkUpdate(true); return; }
+    if (!getPackageManager().canRequestPackageInstalls()) {
+      toast(R.string.update_allow_install);
+      startActivity(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + getPackageName())));
+      return;
+    }
+    if (Updater.phase == Updater.Phase.FAILED) Updater.phase = Updater.Phase.AVAILABLE;
+    Updater.install(this);
+    render();
   }
 
   /** 最近断线，最新的在上面：「11-05 01:25 · 6 分钟 · 被系统冻结」 */
@@ -528,6 +618,10 @@ public class MainActivity extends Activity {
   }
 
   private void toast(int message) { Toast.makeText(this, message, Toast.LENGTH_LONG).show(); }
-  @Override public void onResume() { super.onResume(); handler.post(refresh); }
+  @Override public void onResume() {
+    super.onResume();
+    handler.post(refresh);
+    if (System.currentTimeMillis() - prefs.getLong("updateChecked", 0) > Updater.AUTO_INTERVAL) checkUpdate(false);
+  }
   @Override public void onPause() { handler.removeCallbacks(refresh); super.onPause(); }
 }

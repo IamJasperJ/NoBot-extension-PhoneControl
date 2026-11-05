@@ -88,4 +88,20 @@
   <string name="cause_paused">Paused manually</string>
   <string name="cause_unknown">Unknown cause</string>
   <string name="outages_hint">Often frozen by the system: allow this app to run in the background without restrictions and auto-start, and lock it in recent apps. Could not reach the server: check whether EasyTier or your VPN is also being stopped by power saving.</string>
+  <string name="update_check">Check for updates</string>
+  <string name="update_checking">Checking…</string>
+  <string name="update_latest">You have the latest version</string>
+  <string name="update_available">Version %1$s is available</string>
+  <string name="update_hint">You have %1$s. Updating restarts the app; control pauses for a few seconds and then resumes, and accessibility and other permissions are kept. Please update the Phone Control extension on your server too.</string>
+  <string name="update_install">Download and install</string>
+  <string name="update_notes">Release notes</string>
+  <string name="update_retry">Retry</string>
+  <string name="update_downloading">Downloading %1$d%%</string>
+  <string name="update_installing">Installing, please confirm in the system dialog</string>
+  <string name="update_allow_install">Allow this app to install apps, then come back and tap again</string>
+  <string name="update_failed_network">Could not reach GitHub (%1$s). Check your network or proxy and retry</string>
+  <string name="update_failed_assets">The %1$s release is missing the APK or checksum file</string>
+  <string name="update_failed_checksum">The downloaded file failed verification and was deleted. Please retry</string>
+  <string name="update_failed_package">The downloaded package is not a newer version of this app and was deleted</string>
+  <string name="update_failed_install">Install failed: %1$s</string>
 </resources>

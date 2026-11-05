@@ -63,7 +63,7 @@
 https://github.com/IamJasperJ/NoBot-extension-PhoneControl.git
 ```
 
-想固定某个版本时，分支 / 标签填 `v0.5.7` 这样的版本号。之后可以在扩展详情里检查更新。
+想固定某个版本时，分支 / 标签填 `v0.5.8` 这样的版本号。之后可以在扩展详情里检查更新。
 
 **方式二：下载插件包**
 
@@ -76,6 +76,8 @@ https://github.com/IamJasperJ/NoBot-extension-PhoneControl.git
 要求 **Android 11** 及以上。从 [Releases](https://github.com/IamJasperJ/NoBot-extension-PhoneControl/releases) 下载 `nobot-phone-<版本>.apk` 安装。
 
 App 与扩展的版本号保持一致，升级时两边一起更新。各版本使用同一签名，可以直接覆盖安装，已授予的权限会保留。
+
+App 会自动检查更新（打开主页时，最多每 6 小时一次，也可以点版本号旁的「检查更新」）。发现新版本后点「下载并安装」，App 会从 Releases 下载 APK、按 `SHA256SUMS.txt` 校验，再交给系统安装器覆盖安装。第一次需要允许本 App「安装未知应用」并在系统弹窗里确认；Android 12 及以上之后的更新通常不用再确认。手机要能访问 GitHub。
 
 ### 3. 网络要求
 
