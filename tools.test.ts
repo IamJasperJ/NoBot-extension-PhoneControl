@@ -41,13 +41,14 @@ const toolCtx = (ctx: ExtensionContext, signal = new AbortController().signal) =
 const tool = (ctx: ExtensionContext, name: string) => phoneTools(ctx).find((t) => t.name === name)
 
 /** 模拟手机：不停轮询，按指令回报；observe 回一个有两个按钮的界面 */
-function fakePhone(bridge: Bridge, deviceId: string, log: string[]) {
+function fakePhone(bridge: Bridge, deviceId: string, log: string[], taskIds: string[] = []) {
   let stopped = false
   void (async () => {
     while (!stopped) {
       const job = bridge.poll(deviceId, true)
       if (job) {
         log.push(job.command.action)
+        taskIds.push(job.taskId)
         const data =
           job.command.action === 'observe'
             ? {
@@ -150,13 +151,17 @@ describe('模型工具', () => {
     const pair = bridge.pair()
     bridge.poll(pair.deviceId, true)
     const actions: string[] = []
-    const stop = fakePhone(bridge, pair.deviceId, actions)
+    const taskIds: string[] = []
+    const stop = fakePhone(bridge, pair.deviceId, actions, taskIds)
     try {
       const result = await tool(ctx, 'phone_task')?.run({ goal: '刷会儿 B 站', wait: true }, toolCtx(ctx))
       expect(result?.content).toContain('Phone task finished')
       expect(result?.content).toContain('猫猫视频')
       expect(result?.images?.length).toBe(1)
       expect(actions).toEqual(['observe', 'tap', 'observe', 'swipe', 'observe'])
+      const completedTask = currentTask(ctx.storage)
+      if (!completedTask) throw new Error('TASK_MISSING')
+      expect(taskIds).toEqual(actions.map(() => completedTask.id))
       // 操作员看到的是编号元素和屏幕文字，不是聊天历史
       expect(prompts[0]).toContain('[1] "推荐"')
       expect(prompts[0]).toContain('[2] "搜索" (text field)')
@@ -165,6 +170,9 @@ describe('模型工具', () => {
       expect(currentTask(ctx.storage)?.steps.length).toBe(3)
       expect(recentMemories(ctx.storage)[0]?.memories).toEqual(['刷到一个猫猫视频'])
       expect(memoryPrompt(ctx.storage, Date.now())).toContain('刷会儿 B 站')
+      await tool(ctx, 'phone_task')?.run({ goal: '再看一次', wait: true }, toolCtx(ctx))
+      expect(taskIds.at(-1)).toBe(currentTask(ctx.storage)?.id)
+      expect(taskIds.at(-1)).not.toBe(completedTask.id)
     } finally {
       stop()
     }

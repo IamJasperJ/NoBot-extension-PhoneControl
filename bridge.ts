@@ -44,6 +44,7 @@ interface Job {
   id: string
   deviceId: string
   command: Command
+  taskId?: string
   expiresAt: number
   state: 'queued' | 'delivered' | 'done' | 'cancelled'
   result?: Result
@@ -116,17 +117,24 @@ export class Bridge {
     if (!ready || !job || job.deviceId !== id || job.state !== 'queued' || job.expiresAt <= this.now()) return null
     // 交付即锁定，响应丢失也不重新派发，避免真实设备重复发送或点击。
     this.storage.set('job', { ...job, state: 'delivered' })
-    return { id: job.id, command: job.command, ttlMs: job.expiresAt - this.now() }
+    return { id: job.id, command: job.command, ttlMs: job.expiresAt - this.now(), taskId: job.taskId ?? job.id }
   }
 
-  enqueue(command: Command) {
+  enqueue(command: Command, taskId?: string) {
     const status = this.status()
     if (!status.online || !status.ready || !status.deviceId) throw new Error('DEVICE_OFFLINE')
     const previous = this.storage.get<Job>('job')
     if (previous && ['queued', 'delivered'].includes(previous.state) && previous.expiresAt > this.now())
       throw new Error('DEVICE_BUSY')
     const id = randomBytes(16).toString('hex')
-    this.storage.set('job', { id, deviceId: status.deviceId, command, expiresAt: this.now() + 25_000, state: 'queued' })
+    this.storage.set('job', {
+      id,
+      deviceId: status.deviceId,
+      command,
+      taskId,
+      expiresAt: this.now() + 25_000,
+      state: 'queued',
+    })
     return id
   }
 

@@ -37,7 +37,7 @@
   <string name="mode_title">熄屏方式</string>
   <string name="mode_wake">亮屏解锁：指令到达时点亮屏幕执行</string>
   <string name="mode_panel">只关屏幕面板：屏幕全黑执行（需要 Shizuku 或 Root）</string>
-  <string name="mode_hint">只关屏幕面板时，屏幕物理上全黑，但系统保持亮屏、解锁，截图和点击照常，耗电接近亮屏。熄屏收到指令时先亮屏解锁再立刻关面板；也可以在解锁状态点「现在关闭屏幕面板」一直保持黑屏。按电源键锁屏、再按一次即恢复正常显示。</string>
+  <string name="mode_hint">选择只关屏幕面板后，每轮新任务会自动黑屏执行，系统保持亮屏、解锁，截图和点击照常，耗电接近亮屏。按电源键锁屏、再亮屏并解锁即可手动解除，本轮不再自动黑屏；下一轮新任务重新应用设置。任务结束后保持黑屏，直到手动解除、暂停控制或切换模式。有密码且已锁定时需要先手动解锁。</string>
   <string name="privilege_shizuku">Shizuku（免 Root，无线调试启动）</string>
   <string name="privilege_root">Root</string>
   <string name="privilege_check">检测权限</string>

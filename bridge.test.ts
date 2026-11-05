@@ -36,6 +36,16 @@ function setup() {
 }
 
 describe('设备指令状态机', () => {
+  test('同轮指令携带相同任务标识，下一轮和直接指令使用独立标识', () => {
+    const { bridge, pair } = setup()
+    for (const taskId of ['task-1', 'task-1', 'task-2', undefined]) {
+      const id = bridge.enqueue({ action: 'observe' }, taskId)
+      const job = bridge.poll(pair.deviceId, true)
+      expect(job?.taskId).toBe(taskId ?? id)
+      bridge.finish(pair.deviceId, id, { ok: true, code: 'OK' })
+      bridge.clear(id)
+    }
+  })
   test('令牌只存摘要，按用户隔离，重新配对撤销旧授权', () => {
     const { bridge, pair, storage } = setup()
     expect(JSON.stringify(storage.get('device'))).not.toContain(pair.token)

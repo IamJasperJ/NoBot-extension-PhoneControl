@@ -37,7 +37,7 @@
   <string name="mode_title">Screen-off mode</string>
   <string name="mode_wake">Wake and unlock: turn the screen on to run commands</string>
   <string name="mode_panel">Panel off only: run commands with a black screen (needs Shizuku or root)</string>
-  <string name="mode_hint">With the panel off, the screen is physically black while the system stays awake and unlocked, so screenshots and taps work as usual; battery use is close to screen-on. A command arriving with the screen off wakes and unlocks the phone, then turns the panel off immediately. While unlocked you can also tap “Turn the panel off now” to keep it black. Press the power button to lock, and press it again to restore the display.</string>
+  <string name="mode_hint">In panel-off mode, each new task automatically turns the panel off while the system stays awake and unlocked. Screenshots and taps still work; battery use is close to screen-on. Press power to lock, then wake and unlock to release it manually for the rest of this task. The next task applies the mode again. The panel stays off after a task until you release it, pause control, or change modes. A phone locked with a password must be unlocked first.</string>
   <string name="privilege_shizuku">Shizuku (no root; start via wireless debugging)</string>
   <string name="privilege_root">Root</string>
   <string name="privilege_check">Check permission</string>

@@ -8,6 +8,9 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.content.Intent;
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.graphics.Bitmap;
 import android.graphics.Path;
@@ -49,9 +52,21 @@ public class PhoneService extends AccessibilityService {
   private PowerManager.WakeLock screen;
   /** 屏幕是我们点亮的；只有这种情况空闲后才自动锁屏。 */
   private volatile boolean wokeScreen;
-  /** 只关屏幕面板：面板当前关着 / 手机主人要求一直保持黑屏 */
+  /** 只关屏幕面板：面板当前关着 / 当前需要持续保持黑屏。 */
   private volatile boolean panelOff, panelHold;
   private Privileged privileged;
+  private final PanelSession panelSession = new PanelSession();
+  /** 电源键事件不依赖网络轮询，快速锁屏再亮屏也能记住本轮的手动解除。 */
+  private final BroadcastReceiver screenReceiver = new BroadcastReceiver() {
+    @Override public void onReceive(Context context, Intent intent) {
+      panelSession.release();
+      panelOff = false;
+      wokeScreen = false;
+      main.removeCallbacks(relock);
+      endHold();
+      if (screen.isHeld()) screen.release();
+    }
+  };
   /** 特权调用会阻塞（Root 首次授权要等用户点），放到单独线程 */
   private final ExecutorService panelWorker = Executors.newSingleThreadExecutor();
   private long lastAction;
@@ -85,6 +100,7 @@ public class PhoneService extends AccessibilityService {
     // 上次在线后服务重启过（进程被杀、无障碍被系统关掉再打开等）：等主人重新开始后把这段一起报上去
     long lastOnline = prefs.getLong("lastOnline", 0);
     if (lastOnline > 0) outage.restarted(SystemClock.elapsedRealtime(), System.currentTimeMillis() - lastOnline);
+    registerReceiver(screenReceiver, new IntentFilter(Intent.ACTION_SCREEN_OFF));
     running = true;
     worker.execute(this::loop);
   }
@@ -174,6 +190,7 @@ public class PhoneService extends AccessibilityService {
               if (!enabled() || epoch != prefs.getLong("epoch", 0) || !token.equals(prefs.getString("token", "")) || SystemClock.elapsedRealtime() + 3000 >= deadline) {
                 future.complete(result(false, "CANCELLED")); return;
               }
+              panelSession.begin(job.optString("taskId", id), panelMode());
               execute(job.optJSONObject("command"), future);
             });
             try { result = future.get(Math.max(1, Math.min(10000, deadline - SystemClock.elapsedRealtime())), TimeUnit.MILLISECONDS); }
@@ -215,7 +232,7 @@ public class PhoneService extends AccessibilityService {
 
   private boolean panelMode() { return "panel".equals(prefs.getString("mode", "wake")); }
 
-  /** 关 / 开面板；结果写进 panelStatus 给主页显示，失败时指令照常执行（只是屏幕亮着）。只在后台线程调用。 */
+  /** 关 / 开面板；结果写进 panelStatus 给主页显示，失败时由调用方决定是否继续。只在后台线程调用。 */
   private boolean setPanel(boolean on) {
     int message;
     try {
@@ -234,9 +251,11 @@ public class PhoneService extends AccessibilityService {
 
   /** 轮询线程每轮检查：手机主人按了电源键（系统已接管显示）或暂停控制时结束黑屏。 */
   private void maintainPanel() {
+    if (!enabled() || !panelMode()) panelSession.release();
     if (!panelOff && !panelHold) return;
     boolean interactive = getSystemService(PowerManager.class).isInteractive();
     if (!interactive) {
+      panelSession.release();
       panelOff = false;
       endHold();
     } else if (!enabled() || !panelMode()) {
@@ -260,11 +279,16 @@ public class PhoneService extends AccessibilityService {
     wokeScreen = false;
     main.removeCallbacks(relock);
     performGlobalAction(GLOBAL_ACTION_HOME);
-    main.postDelayed(() -> panelWorker.execute(() -> {
-      if (!setPanel(false)) { main.post(() -> toast(prefs.getInt("panelStatus", R.string.panel_failed))); return; }
-      panelHold = true;
-      screen.acquire(60000);
-    }), 1500);
+    panelSession.hold();
+    long epoch = prefs.getLong("epoch", 0);
+    main.postDelayed(() -> {
+      if (!enabled() || epoch != prefs.getLong("epoch", 0) || !panelSession.requested()) return;
+      CompletableFuture<JSONObject> future = new CompletableFuture<>();
+      future.thenAccept(value -> {
+        if ("PANEL_FAILED".equals(value.optString("code"))) toast(prefs.getInt("panelStatus", R.string.panel_failed));
+      });
+      preparePanel(() -> future.complete(result(true, "OK")), future);
+    }, 1500);
   }
 
   private void toast(int message) { android.widget.Toast.makeText(this, message, android.widget.Toast.LENGTH_LONG).show(); }
@@ -330,7 +354,7 @@ public class PhoneService extends AccessibilityService {
     PowerManager power = getSystemService(PowerManager.class);
     KeyguardManager keyguard = getSystemService(KeyguardManager.class);
     switch (Screen.decide(power.isInteractive(), keyguard.isKeyguardLocked(), keyguard.isDeviceLocked(), prefs.getBoolean("wake", true))) {
-      case RUN: run(command, future); return;
+      case RUN: preparePanel(() -> run(command, future), future); return;
       case LOCKED: future.complete(result(false, "DEVICE_LOCKED")); return;
       case SCREEN_OFF: future.complete(result(false, "SCREEN_OFF")); return;
       default:
@@ -347,15 +371,49 @@ public class PhoneService extends AccessibilityService {
         AccessibilityNodeInfo root = getRootInActiveWindow();
         boolean ours = root != null && getPackageName().contentEquals(root.getPackageName());
         if (power.isInteractive() && !keyguard.isKeyguardLocked() && !ours) {
-          // 解锁动画结束、原来的应用回到前台后再动手；只关面板模式先把刚点亮的面板关掉
-          if (panelMode() && wokeScreen) panelWorker.execute(() -> {
-            setPanel(false);
-            main.post(() -> PhoneService.this.run(command, future));
-          });
-          else main.postDelayed(() -> PhoneService.this.run(command, future), 400);
+          // 已经亮屏和刚解锁走同一入口，黑屏意图不再依赖是谁唤醒手机。
+          main.postDelayed(() -> preparePanel(() -> PhoneService.this.run(command, future), future), 400);
         } else if (SystemClock.elapsedRealtime() > until) future.complete(result(false, "DEVICE_LOCKED"));
         else main.postDelayed(this, 100);
       }
+    });
+  }
+
+  /** 关面板成功后才执行；等待特权服务期间取消或手动解除，不能再把屏幕留黑。 */
+  private void preparePanel(Runnable action, CompletableFuture<JSONObject> future) {
+    if (future.isDone() || !enabled()) { future.complete(result(false, "CANCELLED")); return; }
+    long epoch = prefs.getLong("epoch", 0);
+    if (!panelMode() || !panelSession.requested() || panelOff) { action.run(); return; }
+    panelWorker.execute(() -> {
+      if (future.isDone() || !enabled() || epoch != prefs.getLong("epoch", 0)
+          || !panelMode() || !panelSession.requested()) {
+        main.post(() -> future.complete(result(false, "CANCELLED")));
+        return;
+      }
+      boolean closed = setPanel(false);
+      main.post(() -> {
+        boolean cancelled = future.isDone() || !enabled() || epoch != prefs.getLong("epoch", 0);
+        if (cancelled || !panelMode() || !panelSession.requested()) {
+          if (closed && running) panelWorker.execute(() -> {
+            // 新会话已经要求黑屏时，旧指令的清理不能重新点亮它；销毁时由特权通道负责恢复。
+            if ((!enabled() || !panelMode() || !panelSession.requested())
+                && getSystemService(PowerManager.class).isInteractive()) setPanel(true);
+          });
+          if (cancelled) future.complete(result(false, "CANCELLED"));
+          else action.run();
+          return;
+        }
+        if (!closed) {
+          future.complete(result(false, "PANEL_FAILED"));
+          return;
+        }
+        // 黑屏期间持续保持解锁，不再按旧的 30 秒规则自动锁屏；电源键或暂停会解除。
+        wokeScreen = false;
+        main.removeCallbacks(relock);
+        panelHold = true;
+        screen.acquire(60000);
+        action.run();
+      });
     });
   }
 
@@ -560,6 +618,8 @@ public class PhoneService extends AccessibilityService {
   @Override public void onInterrupt() { if (prefs != null) prefs.edit().putBoolean("enabled", false).putInt("status", R.string.paused).apply(); }
   @Override public void onDestroy() {
     running = false;
+    panelSession.release();
+    try { unregisterReceiver(screenReceiver); } catch (IllegalArgumentException ignored) {}
     instance = null;
     if (prefs != null) prefs.edit().putBoolean("enabled", false).putInt("status", R.string.paused).apply();
     worker.shutdownNow();

@@ -196,7 +196,7 @@ export function startTask(
       policy: policyOf(settings),
     },
     {
-      act: (command) => runCommand(bridge, command, controller.signal),
+      act: (command) => runCommand(bridge, command, controller.signal, state.id),
       think: (messages, image) =>
         ctx.host.complete({
           chatId: input.chatId,
