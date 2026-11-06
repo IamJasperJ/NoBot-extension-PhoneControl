@@ -167,6 +167,14 @@ public class MainActivity extends Activity {
     execution.addView(text(R.string.control_mode_hint, 13, R.color.muted));
     button(execution, R.string.control_check, false, this::checkControl);
 
+    // 角色专用机：无人值守时重启后自动恢复控制；把手机通知告诉 NoBot，角色能注意到来消息
+    LinearLayout dedicated = card(page);
+    dedicated.addView(heading(R.string.section_dedicated));
+    toggleRow(dedicated, "dedicated", false, R.string.dedicated, R.string.dedicated_hint, null);
+    toggleRow(dedicated, "notify", true, R.string.notify, R.string.notify_hint, on -> {
+      if (!on && PhoneService.instance != null) PhoneService.instance.clearInbox();
+    });
+
     // 熄屏使用
     LinearLayout screen = card(page);
     screen.addView(heading(R.string.section_screen));
@@ -341,7 +349,8 @@ public class MainActivity extends Activity {
   private void toggle() {
     if (checkingControl) { toast(R.string.control_checking); return; }
     if (prefs.getBoolean("enabled", false)) {
-      prefs.edit().putLong("epoch", prefs.getLong("epoch", 0) + 1).putBoolean("enabled", false).putInt("status", R.string.paused).apply();
+      prefs.edit().putLong("epoch", prefs.getLong("epoch", 0) + 1).putBoolean("enabled", false).putBoolean("wantEnabled", false)
+        .putInt("status", R.string.paused).apply();
       render();
       return;
     }
@@ -356,7 +365,8 @@ public class MainActivity extends Activity {
       toast(R.string.invalid); return;
     }
     if (Build.VERSION.SDK_INT >= 33) requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 1);
-    prefs.edit().putLong("epoch", prefs.getLong("epoch", 0) + 1).putBoolean("enabled", true).putInt("status", R.string.connecting).apply();
+    prefs.edit().putLong("epoch", prefs.getLong("epoch", 0) + 1).putBoolean("enabled", true).putBoolean("wantEnabled", true)
+      .putInt("status", R.string.connecting).apply();
     render();
   }
 
@@ -475,7 +485,7 @@ public class MainActivity extends Activity {
 
   private void save() {
     if (!valid()) { toast(Endpoint.check(url.getText().toString()) == Endpoint.Check.PUBLIC_HTTP ? R.string.public_http : R.string.invalid); return; }
-    prefs.edit().putLong("epoch", prefs.getLong("epoch", 0) + 1).putBoolean("enabled", false).putString("url", Endpoint.normalize(url.getText().toString()))
+    prefs.edit().putLong("epoch", prefs.getLong("epoch", 0) + 1).putBoolean("enabled", false).putBoolean("wantEnabled", false).putString("url", Endpoint.normalize(url.getText().toString()))
       .putString("device", device.getText().toString().trim()).putString("token", token.getText().toString().trim())
       .putInt("status", R.string.paused).apply();
     toast(R.string.saved);
@@ -629,6 +639,21 @@ public class MainActivity extends Activity {
     field.setText(prefs.getString(key, ""));
     parent.addView(field, margins(0, dp(8), 0, 0));
     return field;
+  }
+
+  /** 开关 + 说明，值直接存进 prefs[key] */
+  private void toggleRow(LinearLayout parent, String key, boolean fallback, int title, int hint, java.util.function.Consumer<Boolean> changed) {
+    Switch toggle = new Switch(this);
+    toggle.setText(title);
+    toggle.setTextColor(getColor(R.color.text));
+    toggle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+    toggle.setChecked(prefs.getBoolean(key, fallback));
+    toggle.setOnCheckedChangeListener((view, checked) -> {
+      prefs.edit().putBoolean(key, checked).apply();
+      if (changed != null) changed.accept(checked);
+    });
+    parent.addView(toggle, margins(0, 0, 0, dp(4)));
+    parent.addView(text(hint, 13, R.color.muted), margins(0, 0, 0, dp(12)));
   }
 
   /** 一组单选，选中值直接存进 prefs[key]，并回调给界面（比如显示 / 隐藏关联设置） */

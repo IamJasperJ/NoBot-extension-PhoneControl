@@ -6,8 +6,8 @@ android {
     applicationId 'dev.nobot.phone'
     minSdk 30
     targetSdk 35
-    versionCode 15
-    versionName '0.6.0'
+    versionCode 16
+    versionName '0.7.0'
   }
   // 发版 CI 用仓库 Secrets 里的固定密钥签名，各版本签名一致才能覆盖安装；本地没有这些环境变量时仍用默认调试签名
   def keystore = System.getenv('NOBOT_KEYSTORE_FILE')

@@ -114,4 +114,9 @@
   <string name="control_failed">Privileged service unavailable. Check Shizuku or stop other phone automation tools.</string>
   <string name="control_pause_check">Pause control before checking the privileged service</string>
   <string name="control_checking">Checking the privileged service, please wait</string>
+  <string name="section_dedicated">Character\'s own phone</string>
+  <string name="dedicated">Dedicated mode: resume control after restarts</string>
+  <string name="dedicated_hint">When on, if the app or phone restarts or the accessibility service reconnects, control resumes automatically as long as you last tapped Start. Use it for a phone left alone for the character. In high-privilege mode Shizuku still has to be started again after a reboot.</string>
+  <string name="notify">Tell NoBot about notifications</string>
+  <string name="notify_hint">Notifications (app name, title and text) are sent to your server over the connection, so the character can notice new messages and decide whether to check or reply. Ongoing notifications and this app\'s own are not sent. Turning this off clears unsent notifications.</string>
 </resources>

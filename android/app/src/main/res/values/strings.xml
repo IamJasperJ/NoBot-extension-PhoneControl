@@ -114,4 +114,9 @@
   <string name="control_failed">高权限服务不可用，请检查 Shizuku 状态，或停止其他正在使用手机自动化的工具</string>
   <string name="control_pause_check">请先暂停控制，再检测高权限服务</string>
   <string name="control_checking">正在检测高权限服务，请稍候</string>
+  <string name="section_dedicated">角色专用机</string>
+  <string name="dedicated">专用机模式：重启后自动恢复控制</string>
+  <string name="dedicated_hint">打开后，App 或手机重启、无障碍服务重连时，只要上次是你点的「开始」，就自动继续接受指令，不用再来点一次。适合放着不管、只给角色用的手机；高权限模式下 Shizuku 仍需在重启后重新启动。</string>
+  <string name="notify">把手机通知告诉 NoBot</string>
+  <string name="notify_hint">收到的通知（应用名、标题和内容）会随连接发给你的服务器，角色可以注意到来消息并决定要不要看看、回复。常驻通知和本 App 的通知不发送；关闭后清空还没发出的通知。</string>
 </resources>

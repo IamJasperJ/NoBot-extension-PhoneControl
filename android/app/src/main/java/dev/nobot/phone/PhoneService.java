@@ -68,6 +68,8 @@ public class PhoneService extends AccessibilityService {
     }
   };
   private final PanelSession panelSession = new PanelSession();
+  /** 待上报的手机通知，持久化在 prefs 的 inbox 里，进程重启不丢 */
+  private final Inbox inbox = new Inbox();
   /** 电源键事件不依赖网络轮询，快速锁屏再亮屏也能记住本轮的手动解除。 */
   private final BroadcastReceiver screenReceiver = new BroadcastReceiver() {
     @Override public void onReceive(Context context, Intent intent) {
@@ -102,8 +104,12 @@ public class PhoneService extends AccessibilityService {
   @Override protected void onServiceConnected() {
     instance = this;
     prefs = getSharedPreferences("bridge", MODE_PRIVATE);
-    // 服务重启必须由手机主人重新开始，不能恢复执行进程退出前的控制意图。
-    prefs.edit().putBoolean("enabled", false).putInt("status", R.string.paused).apply();
+    // 默认服务重启后必须由手机主人重新开始，不能恢复进程退出前的控制意图；
+    // 专用机模式下主人明确要求无人值守，上次是主人点的「开始」（wantEnabled）就自动恢复。
+    if (prefs.getBoolean("dedicated", false) && prefs.getBoolean("wantEnabled", false))
+      prefs.edit().putLong("epoch", prefs.getLong("epoch", 0) + 1).putBoolean("enabled", true).putInt("status", R.string.connecting).apply();
+    else prefs.edit().putBoolean("enabled", false).putInt("status", R.string.paused).apply();
+    restoreInbox();
     privileged = new Privileged(this);
     control = new ControlClient(this);
     prefs.registerOnSharedPreferenceChangeListener(controlSettings);
@@ -200,6 +206,8 @@ public class PhoneService extends AccessibilityService {
         Outage.Report report = outage.succeeded(SystemClock.elapsedRealtime());
         if (report != null) body.put("resumed", new JSONObject().put("offlineMs", Math.min(report.offlineMs, 604800000L))
           .put("cause", report.cause).put("error", report.error));
+        java.util.List<Inbox.Entry> sent = notifyEnabled() ? inbox.batch() : java.util.List.of();
+        if (!sent.isEmpty()) body.put("notifications", encode(sent));
         JSONObject response;
         try { response = request(base + "/poll", token, device, body); }
         catch (Exception e) {
@@ -207,6 +215,8 @@ public class PhoneService extends AccessibilityService {
           throw e;
         }
         if (report != null) remember(report);
+        // 服务端已收到（HTTP 200）才删；失败时留着下次再报
+        if (!sent.isEmpty()) { inbox.ack(sent); saveInbox(); }
         prefs.edit().putLong("lastOnline", System.currentTimeMillis()).apply();
         if (enabled()) status(R.string.connected);
         failures = 0;
@@ -731,12 +741,70 @@ public class PhoneService extends AccessibilityService {
   private String limited(CharSequence value) { return value == null ? "" : value.subSequence(0, Math.min(200, value.length())).toString(); }
   /** 我们的动作结束 2 秒后还有窗口切换，多半是手机主人拿起来用了：不再自动锁屏。 */
   @Override public void onAccessibilityEvent(AccessibilityEvent event) {
+    if (event.getEventType() == AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED) { notified(event); return; }
+    if (event.getEventType() != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return;
     if (wokeScreen && main.hasCallbacks(relock) && SystemClock.elapsedRealtime() - lastAction > 2000) {
       wokeScreen = false;
       main.removeCallbacks(relock);
       if (screen.isHeld()) screen.release();
     }
   }
+  private boolean notifyEnabled() { return prefs != null && prefs.getBoolean("notify", true); }
+
+  /** 不上报的通知来源：自己、系统界面 */
+  private static final java.util.Set<String> SILENT = java.util.Set.of("dev.nobot.phone", "android", "com.android.systemui");
+
+  /**
+   * 系统通知（角色手机上来了消息）：记进 inbox，随下次轮询报给服务端。
+   * 常驻和前台服务通知（音乐播放、下载进度、各种保活）不是「来消息」，不报；Toast 没有 Notification 对象，也不报。
+   */
+  private void notified(AccessibilityEvent event) {
+    if (!notifyEnabled() || event.getPackageName() == null) return;
+    String pkg = event.getPackageName().toString();
+    if (SILENT.contains(pkg) || !(event.getParcelableData() instanceof Notification)) return;
+    Notification notification = (Notification) event.getParcelableData();
+    if ((notification.flags & (Notification.FLAG_ONGOING_EVENT | Notification.FLAG_FOREGROUND_SERVICE | Notification.FLAG_GROUP_SUMMARY)) != 0) return;
+    if (Notification.CATEGORY_PROGRESS.equals(notification.category) || Notification.CATEGORY_TRANSPORT.equals(notification.category)
+      || Notification.CATEGORY_SERVICE.equals(notification.category)) return;
+    Bundle extras = notification.extras;
+    CharSequence title = extras == null ? null : extras.getCharSequence(Notification.EXTRA_TITLE);
+    CharSequence text = extras == null ? null : extras.getCharSequence(Notification.EXTRA_BIG_TEXT);
+    if (text == null && extras != null) text = extras.getCharSequence(Notification.EXTRA_TEXT);
+    if (text == null && !event.getText().isEmpty()) text = android.text.TextUtils.join(" ", event.getText());
+    String app = pkg;
+    try { app = getPackageManager().getApplicationLabel(getPackageManager().getApplicationInfo(pkg, 0)).toString(); }
+    catch (Exception ignored) {}
+    if (inbox.add(new Inbox.Entry(System.currentTimeMillis(), pkg, app, title == null ? "" : title.toString(), text == null ? "" : text.toString())))
+      saveInbox();
+  }
+
+  private static JSONArray encode(java.util.List<Inbox.Entry> entries) throws org.json.JSONException {
+    JSONArray list = new JSONArray();
+    for (Inbox.Entry e : entries)
+      list.put(new JSONObject().put("at", e.at).put("package", e.pkg).put("app", e.app).put("title", e.title).put("text", e.text));
+    return list;
+  }
+
+  private void saveInbox() {
+    try { prefs.edit().putString("inbox", encode(inbox.all()).toString()).apply(); } catch (Exception ignored) {}
+  }
+
+  private void restoreInbox() {
+    if (!notifyEnabled()) { inbox.clear(); prefs.edit().remove("inbox").apply(); return; }
+    java.util.List<Inbox.Entry> entries = new java.util.ArrayList<>();
+    try {
+      JSONArray list = new JSONArray(prefs.getString("inbox", "[]"));
+      for (int i = 0; i < list.length(); i++) {
+        JSONObject e = list.getJSONObject(i);
+        entries.add(new Inbox.Entry(e.getLong("at"), e.optString("package"), e.optString("app"), e.optString("title"), e.optString("text")));
+      }
+    } catch (Exception ignored) {}
+    inbox.restore(entries);
+  }
+
+  /** 主页关掉「把通知告诉 NoBot」时清空还没报的 */
+  void clearInbox() { inbox.clear(); prefs.edit().remove("inbox").apply(); }
+
   @Override public void onInterrupt() { if (prefs != null) prefs.edit().putBoolean("enabled", false).putInt("status", R.string.paused).apply(); }
   @Override public void onDestroy() {
     running = false;
