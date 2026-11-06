@@ -74,6 +74,8 @@ public class PhoneService extends AccessibilityService {
       panelSession.release();
       if (control != null) control.cancel();
       panelOff = false;
+      // 熄屏后系统再亮屏会自己打开面板，不需要重启后恢复
+      prefs.edit().putBoolean("panelDark", false).apply();
       wokeScreen = false;
       main.removeCallbacks(relock);
       endHold();
@@ -117,7 +119,25 @@ public class PhoneService extends AccessibilityService {
     if (lastOnline > 0) outage.restarted(SystemClock.elapsedRealtime(), System.currentTimeMillis() - lastOnline);
     registerReceiver(screenReceiver, new IntentFilter(Intent.ACTION_SCREEN_OFF));
     running = true;
+    restorePanelAfterRestart();
     worker.execute(this::loop);
+  }
+
+  /**
+   * 进程在黑屏期间被杀（内存不足清后台、崩溃等）：内存里的 panelOff 随进程丢失，
+   * Shizuku 用户服务也跟着 App 一起结束、来不及恢复，屏幕会一直黑到按电源键。
+   * 所以关面板时在 prefs 里记一笔，服务重新连上时还在亮屏就主动恢复一次；Shizuku 的连接可能晚到，失败时再试两次。
+   */
+  private void restorePanelAfterRestart() {
+    if (!prefs.getBoolean("panelDark", false)) return;
+    panelWorker.execute(() -> {
+      for (int attempt = 0; attempt < 3 && running; attempt++) {
+        // 已经熄屏：系统再亮屏时会自己打开面板
+        if (!getSystemService(PowerManager.class).isInteractive()) { prefs.edit().putBoolean("panelDark", false).apply(); return; }
+        if (setPanel(true, prefs.getBoolean("panelDarkShizuku", true))) return;
+        try { Thread.sleep(2000); } catch (InterruptedException e) { Thread.currentThread().interrupt(); return; }
+      }
+    });
   }
 
   private boolean enabled() { return running && prefs.getBoolean("enabled", false); }
@@ -259,12 +279,18 @@ public class PhoneService extends AccessibilityService {
   private boolean panelMode() { return "panel".equals(prefs.getString("mode", "wake")); }
 
   /** 关 / 开面板；结果写进 panelStatus 给主页显示，失败时由调用方决定是否继续。只在后台线程调用。 */
-  private boolean setPanel(boolean on) {
+  private boolean setPanel(boolean on) { return setPanel(on, shizukuMode() || Privileged.SHIZUKU.equals(prefs.getString("privilege", Privileged.SHIZUKU))); }
+
+  /** shizuku：用 Shizuku 还是 Root；恢复时要用关面板时的那个来源，所以一起记下来 */
+  @android.annotation.SuppressLint("ApplySharedPref") // 只在面板线程调用，同步写盘是有意的
+  private boolean setPanel(boolean on, boolean shizuku) {
     int message;
     try {
-      privileged.set(on, shizukuMode());
+      privileged.set(on, shizuku);
       panelOff = !on;
-      prefs.edit().putInt("panelStatus", on ? R.string.panel_restored : R.string.panel_off).apply();
+      // commit 而不是 apply：关面板后进程随时可能被杀，记录必须先落盘
+      prefs.edit().putInt("panelStatus", on ? R.string.panel_restored : R.string.panel_off)
+        .putBoolean("panelDark", !on).putBoolean("panelDarkShizuku", shizuku).commit();
       return true;
     } catch (Privileged.Unavailable e) {
       message = e.message;
@@ -283,6 +309,7 @@ public class PhoneService extends AccessibilityService {
     if (!interactive) {
       panelSession.release();
       panelOff = false;
+      prefs.edit().putBoolean("panelDark", false).apply();
       endHold();
     } else if (!enabled() || !panelMode()) {
       endHold();
