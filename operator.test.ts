@@ -250,6 +250,38 @@ describe('操作员主循环', () => {
     }
   })
 
+  test('Shizuku 断开、拒绝授权和超时在观察阶段直接停止', async () => {
+    for (const code of [
+      'SHIZUKU_UNAVAILABLE',
+      'SHIZUKU_PERMISSION_REQUIRED',
+      'SHIZUKU_CONTROL_FAILED',
+      'SHIZUKU_TIMEOUT',
+    ]) {
+      const f = ports([])
+      f.p.act = async (command) => {
+        f.commands.push(command)
+        return { ok: false, code }
+      }
+      const report = await runOperator(goal(), f.p, new AbortController().signal)
+      expect(report.endReason).toBe('gave_up')
+      expect(f.commands).toEqual([{ action: 'observe' }])
+      expect(f.prompts).toHaveLength(0)
+    }
+  })
+
+  test('Shizuku 动作中失败不重试；聚焦失败不继续输入或回车', async () => {
+    for (const type of ['tap', 'type']) {
+      const decision =
+        type === 'tap' ? { type: 'tap', element: 1 } : { type: 'type', element: 2, text: '测试', submit: true }
+      const f = ports([JSON.stringify({ action: decision })], () => ({ ok: false, code: 'SHIZUKU_TIMEOUT' }))
+      const report = await runOperator(goal(), f.p, new AbortController().signal)
+      expect(report.endReason).toBe('gave_up')
+      expect(report.summary).toContain('timed out')
+      expect(f.commands.map((command) => command.action)).toEqual(['observe', 'tap'])
+      expect(report.steps).toHaveLength(1)
+    }
+  })
+
   test('打开应用：先列出已安装应用再按名字匹配；找不到时把已安装列表告诉模型', async () => {
     const f = ports(
       [

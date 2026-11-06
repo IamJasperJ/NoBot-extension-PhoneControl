@@ -199,3 +199,9 @@ Keep using the same key, or users will not be able to upgrade in place.
 ## License
 
 [AGPL-3.0-or-later](LICENSE), the same as NoBot.
+
+## 0.6.0 branch build: optional Shizuku control
+
+The companion now offers two control methods. Accessibility remains the default; Shizuku mode uses a shell user service for raw touch/key injection, screenshots, app launching and wake-up. Existing tasks, panel-off behavior, password-input policy, pairing and updates remain available. Changing modes pauses control; start it again explicitly. Failures never silently switch backends or replay actions.
+
+Accessibility must remain enabled to host the existing connection and status service. Text editing still requires an accessible editable field. Non-root Shizuku must be restarted after a phone reboot. This branch build has not been tested on a real device or published as a stable release. See [the implementation and device checklist](docs/SHIZUKU-CONTROL.md).

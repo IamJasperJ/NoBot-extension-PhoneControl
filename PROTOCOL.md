@@ -164,3 +164,7 @@ cancelled    超时：结果未知
 过期条目不能再次交付，旧回报不能覆盖新指令。服务器重启后读取持久化状态，不把 `delivered` 重置为 `queued`。
 
 旧版 App 收到 `longpress` / `enter` / `apps`，以及 0.5.0 及更早 App 收到 `drag` 时，会回报 `UNSUPPORTED_ACTION`，操作员据此改用别的办法（比如点搜索按钮、回桌面点图标）。
+
+## 0.6.0 可选 Shizuku 后端
+
+外部动作与协议版本不变。新增失败码 `SHIZUKU_UNAVAILABLE`、`SHIZUKU_PERMISSION_REQUIRED`、`SHIZUKU_CONTROL_FAILED`、`SHIZUKU_TIMEOUT`。操作员在观察或动作阶段遇到这些错误即停止，不自动重试或回退。高权限模式手机单条指令最多等待 20 秒，且不超过原指令 TTL；旧模式仍为 10 秒。特权通道内部的 `probe` 和 `wake` 不向外部协议开放。

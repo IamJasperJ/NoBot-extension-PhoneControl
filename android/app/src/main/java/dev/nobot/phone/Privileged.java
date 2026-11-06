@@ -65,8 +65,8 @@ final class Privileged {
   }
 
   /** 关 / 开屏幕面板，失败抛异常；首次使用 Root 时 su 可能弹授权框，给足等待时间。 */
-  synchronized void set(boolean on) throws Exception {
-    String wanted = prefs.getString("privilege", SHIZUKU);
+  synchronized void set(boolean on, boolean forceShizuku) throws Exception {
+    String wanted = forceShizuku ? SHIZUKU : prefs.getString("privilege", SHIZUKU);
     if (!wanted.equals(source)) close();
     source = wanted;
     if (SHIZUKU.equals(source)) {

@@ -616,6 +616,15 @@ export function parseDecision(text: string): Decision {
 
 /** 手机端回报的失败码中，这些说明现在没法继续，直接结束 */
 const SCREEN_FAILURES: Record<string, string> = {
+  SHIZUKU_UNAVAILABLE:
+    'Shizuku is not running or its connection was lost. Start Shizuku on the phone before starting another task.',
+  SHIZUKU_PERMISSION_REQUIRED:
+    'The phone companion needs Shizuku authorization. Grant it on the phone before starting another task.',
+  SHIZUKU_CONTROL_FAILED:
+    'The privileged phone controller failed. Check Shizuku and the device compatibility. An action may have partially completed; do not retry it automatically.',
+  SHIZUKU_TIMEOUT:
+    'The privileged phone controller timed out and control was paused. An action may have partially completed; inspect the phone before resuming.',
+
   DEVICE_LOCKED:
     'The phone reported a lock screen that could not be dismissed. This does not necessarily mean a password is configured.',
   SCREEN_OFF: 'Automatic waking is disabled on the phone. Enable it in the companion app or wake the phone manually.',
@@ -893,6 +902,12 @@ export async function runOperator(goal: Goal, ports: OperatorPorts, signal: Abor
           break
       }
       record(decision.thought, describeAction(action, screen, password), result)
+      // 特权通道失败时结果可能未知，不能让模型在下一轮重新发相同动作。
+      if (BLOCKING.has(result)) {
+        endReason = 'gave_up'
+        summary = SCREEN_FAILURES[result]!
+        break
+      }
       if (result === 'OUTCOME_UNKNOWN' || result === 'DEVICE_OFFLINE') {
         if (++failures >= MAX_FAILURES) {
           endReason = 'error'

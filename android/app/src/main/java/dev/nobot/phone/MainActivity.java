@@ -153,6 +153,20 @@ public class MainActivity extends Activity {
       notifications = new Check(setup, R.string.check_notifications, R.string.action_allow,
         () -> requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 1));
 
+    // 旧模式仍是默认值，切换执行器先暂停，避免在同一条指令中混用两套输入方式。
+    LinearLayout execution = card(page);
+    execution.addView(heading(R.string.control_mode_title));
+    radios(execution, "controlMode", ControlMode.ACCESSIBILITY,
+      new int[]{R.string.control_accessibility, R.string.control_shizuku},
+      new String[]{ControlMode.ACCESSIBILITY, ControlMode.SHIZUKU}, value -> {
+        prefs.edit().putBoolean("enabled", false).putLong("epoch", prefs.getLong("epoch", 0) + 1)
+          .putInt("status", R.string.paused).apply();
+        toast(R.string.control_mode_changed);
+        render();
+      });
+    execution.addView(text(R.string.control_mode_hint, 13, R.color.muted));
+    button(execution, R.string.control_check, false, this::checkControl);
+
     // 熄屏使用
     LinearLayout screen = card(page);
     screen.addView(heading(R.string.section_screen));
@@ -325,12 +339,17 @@ public class MainActivity extends Activity {
   }
 
   private void toggle() {
+    if (checkingControl) { toast(R.string.control_checking); return; }
     if (prefs.getBoolean("enabled", false)) {
       prefs.edit().putLong("epoch", prefs.getLong("epoch", 0) + 1).putBoolean("enabled", false).putInt("status", R.string.paused).apply();
       render();
       return;
     }
     if (PhoneService.instance == null) { toast(R.string.need_accessibility); return; }
+    if (ControlMode.privileged(prefs.getString("controlMode", ControlMode.ACCESSIBILITY))) {
+      if (!Shizuku.pingBinder()) { toast(R.string.shizuku_not_running); return; }
+      if (Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) { Shizuku.requestPermission(4); return; }
+    }
     if (!valid() || !prefs.getString("token", "").equals(token.getText().toString().trim())
         || !prefs.getString("device", "").equals(device.getText().toString().trim())
         || !prefs.getString("url", "").equals(Endpoint.normalize(url.getText().toString()))) {
@@ -360,9 +379,27 @@ public class MainActivity extends Activity {
     } catch (Exception e) { return R.string.shizuku_state_none; }
   }
 
+  /** 先申请 Shizuku 权限，再实际连接自动化服务；仅检测，不注入输入或点亮屏幕。 */
+  private boolean checkingControl;
+
+  private void checkControl() {
+    if (checkingControl) { toast(R.string.control_checking); return; }
+    if (prefs.getBoolean("enabled", false)) { toast(R.string.control_pause_check); return; }
+    if (!Shizuku.pingBinder()) { toast(R.string.shizuku_not_running); return; }
+    if (Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) { Shizuku.requestPermission(4); return; }
+    PhoneService service = PhoneService.instance;
+    if (service == null) { toast(R.string.need_accessibility); return; }
+    checkingControl = true;
+    service.checkControl(result -> runOnUiThread(() -> {
+      checkingControl = false;
+      if (!isDestroyed()) toast(result.optBoolean("ok") ? R.string.control_ready : R.string.control_failed);
+    }));
+  }
+
   /** 检测所选权限来源；Shizuku 未授权时弹出 Shizuku 的授权框，Root 用 su -c id 试一次（Magisk 等会弹授权框）。 */
   private void checkPrivilege() {
-    if (Privileged.SHIZUKU.equals(prefs.getString("privilege", Privileged.SHIZUKU))) {
+    if (ControlMode.privileged(prefs.getString("controlMode", ControlMode.ACCESSIBILITY))
+        || Privileged.SHIZUKU.equals(prefs.getString("privilege", Privileged.SHIZUKU))) {
       new Thread(() -> {
         int message = R.string.privilege_ok;
         try { Privileged.check(Privileged.SHIZUKU); }

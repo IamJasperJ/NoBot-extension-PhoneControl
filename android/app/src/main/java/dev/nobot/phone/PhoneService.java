@@ -55,11 +55,24 @@ public class PhoneService extends AccessibilityService {
   /** 只关屏幕面板：面板当前关着 / 当前需要持续保持黑屏。 */
   private volatile boolean panelOff, panelHold;
   private Privileged privileged;
+  private volatile ControlClient control;
+  private final ExecutorService controlWorker = Executors.newSingleThreadExecutor();
+  /** 暂停、重新配对或切换模式立即撤销特权动作，不等待网络轮询。 */
+  private final SharedPreferences.OnSharedPreferenceChangeListener controlSettings = (settings, key) -> {
+    if ("enabled".equals(key) || "epoch".equals(key) || "controlMode".equals(key)) {
+      if (control != null) control.cancel();
+      if ("controlMode".equals(key) && !shizukuMode()) controlWorker.execute(() -> {
+        control.close();
+        control = new ControlClient(this);
+      });
+    }
+  };
   private final PanelSession panelSession = new PanelSession();
   /** 电源键事件不依赖网络轮询，快速锁屏再亮屏也能记住本轮的手动解除。 */
   private final BroadcastReceiver screenReceiver = new BroadcastReceiver() {
     @Override public void onReceive(Context context, Intent intent) {
       panelSession.release();
+      if (control != null) control.cancel();
       panelOff = false;
       wokeScreen = false;
       main.removeCallbacks(relock);
@@ -90,6 +103,8 @@ public class PhoneService extends AccessibilityService {
     // 服务重启必须由手机主人重新开始，不能恢复执行进程退出前的控制意图。
     prefs.edit().putBoolean("enabled", false).putInt("status", R.string.paused).apply();
     privileged = new Privileged(this);
+    control = new ControlClient(this);
+    prefs.registerOnSharedPreferenceChangeListener(controlSettings);
     PowerManager power = getSystemService(PowerManager.class);
     cpu = power.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "nobot:poll");
     cpu.setReferenceCounted(false);
@@ -193,7 +208,7 @@ public class PhoneService extends AccessibilityService {
               panelSession.begin(job.optString("taskId", id), panelMode());
               execute(job.optJSONObject("command"), future);
             });
-            try { result = future.get(Math.max(1, Math.min(10000, deadline - SystemClock.elapsedRealtime())), TimeUnit.MILLISECONDS); }
+            try { result = future.get(Math.max(1, Math.min(shizukuMode() ? 20000 : 10000, deadline - SystemClock.elapsedRealtime())), TimeUnit.MILLISECONDS); }
             catch (TimeoutException e) {
               prefs.edit().putBoolean("enabled", false).apply();
               status(R.string.execution_timeout);
@@ -230,13 +245,24 @@ public class PhoneService extends AccessibilityService {
   }
 
 
+  /** 检测和正式动作共用同一特权连接，避免两份客户端互相销毁用户服务。 */
+  void checkControl(java.util.function.Consumer<JSONObject> callback) {
+    controlWorker.execute(() -> {
+      JSONObject command = new JSONObject();
+      try { command.put("action", "probe"); } catch (Exception ignored) {}
+      callback.accept(control.execute(command));
+    });
+  }
+
+  private boolean shizukuMode() { return ControlMode.privileged(prefs.getString("controlMode", ControlMode.ACCESSIBILITY)); }
+
   private boolean panelMode() { return "panel".equals(prefs.getString("mode", "wake")); }
 
   /** 关 / 开面板；结果写进 panelStatus 给主页显示，失败时由调用方决定是否继续。只在后台线程调用。 */
   private boolean setPanel(boolean on) {
     int message;
     try {
-      privileged.set(on);
+      privileged.set(on, shizukuMode());
       panelOff = !on;
       prefs.edit().putInt("panelStatus", on ? R.string.panel_restored : R.string.panel_off).apply();
       return true;
@@ -276,9 +302,28 @@ public class PhoneService extends AccessibilityService {
    */
   void holdPanel() {
     if (!enabled()) { toast(R.string.panel_need_start); return; }
+    long requestedEpoch = prefs.getLong("epoch", 0);
+    if (shizukuMode()) {
+      controlWorker.execute(() -> {
+        if (!enabled() || requestedEpoch != prefs.getLong("epoch", 0)) return;
+        JSONObject command = new JSONObject();
+        try { command.put("action", "home"); } catch (Exception ignored) {}
+        JSONObject response = control.execute(command);
+        main.post(() -> {
+          if (!enabled() || requestedEpoch != prefs.getLong("epoch", 0)) return;
+          if (!response.optBoolean("ok")) { toast(R.string.control_failed); return; }
+          holdPanelAfterHome();
+        });
+      });
+      return;
+    }
+    performGlobalAction(GLOBAL_ACTION_HOME);
+    holdPanelAfterHome();
+  }
+
+  private void holdPanelAfterHome() {
     wokeScreen = false;
     main.removeCallbacks(relock);
-    performGlobalAction(GLOBAL_ACTION_HOME);
     panelSession.hold();
     long epoch = prefs.getLong("epoch", 0);
     main.postDelayed(() -> {
@@ -362,9 +407,32 @@ public class PhoneService extends AccessibilityService {
     }
     if (!power.isInteractive()) wokeScreen = true;
     if (!screen.isHeld()) screen.acquire(RELOCK_DELAY * 4);
+    if (shizukuMode()) {
+      long epoch = prefs.getLong("epoch", 0);
+      controlWorker.execute(() -> {
+        JSONObject wake = new JSONObject();
+        try { wake.put("action", "wake"); } catch (Exception ignored) {}
+        if (future.isDone() || !enabled() || epoch != prefs.getLong("epoch", 0)) return;
+        JSONObject response = control.execute(wake);
+        if ("SHIZUKU_TIMEOUT".equals(response.optString("code"))) prefs.edit().putBoolean("enabled", false).apply();
+        main.post(() -> {
+          if (future.isDone() || epoch != prefs.getLong("epoch", 0)) { future.complete(result(false, "CANCELLED")); return; }
+          if (!response.optBoolean("ok")) { future.complete(response); return; }
+          if (!enabled()) { future.complete(result(false, "CANCELLED")); return; }
+          awaitWake(command, future);
+        });
+      });
+      return;
+    }
     try {
       startActivity(new Intent(this, UnlockActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NO_ANIMATION));
     } catch (Exception e) { future.complete(result(false, "WAKE_FAILED")); return; }
+    awaitWake(command, future);
+  }
+
+  private void awaitWake(JSONObject command, CompletableFuture<JSONObject> future) {
+    PowerManager power = getSystemService(PowerManager.class);
+    KeyguardManager keyguard = getSystemService(KeyguardManager.class);
     // 留出唤醒页面四秒的窗口和退出动画时间，仍低于单条指令的十秒等待上限。
     long until = SystemClock.elapsedRealtime() + 5000;
     long wakeEpoch = prefs.getLong("epoch", 0);
@@ -378,7 +446,10 @@ public class PhoneService extends AccessibilityService {
         boolean ours = root != null && getPackageName().contentEquals(root.getPackageName());
         if (power.isInteractive() && !keyguard.isKeyguardLocked() && !ours) {
           // 已经亮屏和刚解锁走同一入口，黑屏意图不再依赖是谁唤醒手机。
-          main.postDelayed(() -> preparePanel(() -> PhoneService.this.run(command, future), future), 400);
+          main.postDelayed(() -> {
+            if (!enabled() || wakeEpoch != prefs.getLong("epoch", 0)) { future.complete(result(false, "CANCELLED")); return; }
+            preparePanel(() -> PhoneService.this.run(command, future), future);
+          }, 400);
         } else if (SystemClock.elapsedRealtime() > until) future.complete(result(false,
           Screen.wakeFailure(power.isInteractive(), keyguard.isKeyguardLocked(), keyguard.isDeviceLocked(), keyguard.isDeviceSecure(), ours)));
         else main.postDelayed(this, 100);
@@ -431,6 +502,22 @@ public class PhoneService extends AccessibilityService {
         future.complete(result(false, keyguard.isDeviceLocked() && keyguard.isDeviceSecure() ? "DEVICE_LOCKED" : "UNLOCK_FAILED")); return;
       }
       String action = command.getString("action");
+      if (shizukuMode() && !action.equals("apps")) {
+        long epoch = prefs.getLong("epoch", 0);
+        controlWorker.execute(() -> {
+          if (future.isDone() || !enabled() || epoch != prefs.getLong("epoch", 0)) { future.complete(result(false, "CANCELLED")); return; }
+          KeyguardManager currentKeyguard = getSystemService(KeyguardManager.class);
+          if (currentKeyguard.isKeyguardLocked()) {
+            future.complete(result(false, currentKeyguard.isDeviceLocked() && currentKeyguard.isDeviceSecure()
+              ? "DEVICE_LOCKED" : "UNLOCK_FAILED")); return;
+          }
+          JSONObject response = control.execute(command);
+          // 超时可能已经产生部分效果，必须暂停而不是继续下一条动作。
+          if ("SHIZUKU_TIMEOUT".equals(response.optString("code"))) prefs.edit().putBoolean("enabled", false).apply();
+          future.complete(response);
+        });
+        return;
+      }
       switch (action) {
         case "observe": observe(future); return;
         case "tap": case "swipe": case "longpress": gesture(command, future); return;
@@ -630,6 +717,10 @@ public class PhoneService extends AccessibilityService {
     try { unregisterReceiver(screenReceiver); } catch (IllegalArgumentException ignored) {}
     instance = null;
     if (prefs != null) prefs.edit().putBoolean("enabled", false).putInt("status", R.string.paused).apply();
+    prefs.unregisterOnSharedPreferenceChangeListener(controlSettings);
+    control.cancel();
+    controlWorker.execute(() -> control.close());
+    controlWorker.shutdown();
     worker.shutdownNow();
     // 特权进程断开时会自己恢复面板
     panelWorker.execute(privileged::close);

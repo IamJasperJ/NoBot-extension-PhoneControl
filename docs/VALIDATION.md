@@ -130,3 +130,13 @@
 - 唤醒页面改为 onResume 后检查实际交互状态，窗口获得焦点后请求解除无密码锁屏；退出保护 4 秒，服务等待 5 秒，分别回报 WAKE_FAILED / UNLOCK_FAILED / WAKE_DISABLED / CONTROL_APP_VISIBLE。只有设备配置安全凭据且仍锁定时才按凭据锁定处理。服务端按不同错误说明，不推断用户仍设置了密码。
 - 插件 76 项测试、Android 24 项单元测试通过，涵盖无密码但未亮屏时不能提前结束、信任解锁、唤醒失败分类、服务端遇到相应错误时停止并说明。TypeScript、Biome、APK 构建及 Android Lint 通过，Lint 为 No issues found。Java 编译仍有现有依赖注解和旧 API 警告。
 - 无 ADB 真机连接；Activity 生命周期的实际亮屏、厂商后台弹窗限制、无密码滑动解锁仍需用户手机验证。没有部署到服务器或手机。
+
+## 0.6.0 分支版：Shizuku 高权限控制（2026-11-06）
+
+- 分支 `codex/phone-shizuku-control`。默认保留原有无障碍模式，新增手机端控制方式选择与 Shizuku 服务检测；切换暂停。配对、任务、密码输入限制、黑屏与手动解除、原有 Root 面板方式及更新保留。
+- 新增 IControl / ControlClient / ControlUserService / ShellControl：shell 用户服务使用 UiAutomation 注入原始触摸和按键、截图、读取节点和编辑文字，固定命令启动应用与唤醒；结果经有大小限制的管道返回。自动化连接不关闭其他无障碍服务。网络轮询仍由 PhoneService 承载，仍须开启无障碍服务。
+- 连续手势支持真实原地按住、沿路径移动和终点停留；暂停和截止时间使排队/持续动作失效，抬起或取消在 finally 中清理。切回旧模式关闭特权连接。不开放任意 shell；失败和超时不自动回退或重放。
+- 插件 78 项测试通过，1053 个断言。新增观察/动作阶段 Shizuku 失联、拒绝授权、控制失败和超时停止测试，以及聚焦失败不继续输入/提交。安装集成沿用工作区已有的 configureExtension 适配改动，本次未修改该文件。
+- Android testDebugUnitTest / assembleDebug / lintDebug 通过：35 项单元测试，新增轨迹、坐标范围、取消代号、超时分类及默认模式测试。Lint 0 错误、3 处 PrivateApi 兼容性警告；编译有原有依赖注解和旧 API 警告。
+- TypeScript 类型检查、修改 TS/JSON 的 Biome、git diff --check 通过；Android 中英文资源键一致且无重复。
+- 没有连接 ADB 真机，因此尚未验证 Shizuku 绑定、系统自动化连接、真实触摸/截图、厂商输入注入限制、横竖屏及省电策略。检测按钮只确认连接，不等于整机验收。详见 SHIZUKU-CONTROL.md。未推送分支、未发布 Release、未部署或安装到手机。

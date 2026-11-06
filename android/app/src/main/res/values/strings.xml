@@ -104,4 +104,14 @@
   <string name="update_failed_checksum">下载的文件校验不通过，已删除，请重试</string>
   <string name="update_failed_package">下载的安装包不是本 App 的新版本，已删除</string>
   <string name="update_failed_install">安装失败：%1$s</string>
+  <string name="control_mode_title">控制方式</string>
+  <string name="control_accessibility">无障碍（原有方式）</string>
+  <string name="control_shizuku">Shizuku 高权限</string>
+  <string name="control_mode_hint">高权限模式使用 Shizuku 执行触摸、按键、截图、启动应用和唤醒。请先启动并授权 Shizuku；无障碍仍需开启，用于连接与状态管理。中文输入依赖应用提供的可编辑控件。黑屏使用 Shizuku，原有 Root 设置保留给无障碍模式。切换方式会暂停，权限丢失时不会自动回退或重试动作。</string>
+  <string name="control_mode_changed">控制方式已切换并暂停，请重新开始控制</string>
+  <string name="control_check">检测 Shizuku 控制服务</string>
+  <string name="control_ready">Shizuku 控制服务连接成功</string>
+  <string name="control_failed">高权限服务不可用，请检查 Shizuku 状态，或停止其他正在使用手机自动化的工具</string>
+  <string name="control_pause_check">请先暂停控制，再检测高权限服务</string>
+  <string name="control_checking">正在检测高权限服务，请稍候</string>
 </resources>

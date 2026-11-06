@@ -104,4 +104,14 @@
   <string name="update_failed_checksum">The downloaded file failed verification and was deleted. Please retry</string>
   <string name="update_failed_package">The downloaded package is not a newer version of this app and was deleted</string>
   <string name="update_failed_install">Install failed: %1$s</string>
+  <string name="control_mode_title">Control method</string>
+  <string name="control_accessibility">Accessibility (original)</string>
+  <string name="control_shizuku">Shizuku privileged control</string>
+  <string name="control_mode_hint">Privileged mode uses Shizuku for touch, keys, screenshots, app launching and waking. Start and authorize Shizuku first. Keep accessibility enabled for connection and status management. Text input requires an accessible editable field. Panel-off uses Shizuku; the original Root setting is retained for accessibility mode. Switching pauses control; permission loss never silently falls back or replays actions.</string>
+  <string name="control_mode_changed">Control method changed and paused. Start control again.</string>
+  <string name="control_check">Check Shizuku control service</string>
+  <string name="control_ready">Shizuku control service connected</string>
+  <string name="control_failed">Privileged service unavailable. Check Shizuku or stop other phone automation tools.</string>
+  <string name="control_pause_check">Pause control before checking the privileged service</string>
+  <string name="control_checking">Checking the privileged service, please wait</string>
 </resources>
