@@ -1,8 +1,11 @@
 import type { Extension } from '../../apps/server/src/extensions/types'
 import { settings } from './host'
 import { translate } from './i18n'
+import { startBackground } from './life'
+import { notificationPrompt } from './notifications'
+import { profilePrompt } from './profile'
 import { registerRoutes, registerTaskRoutes } from './routes'
-import { DEFAULT_SETTINGS, memoryPrompt, settingsOf, stopAll } from './tasks'
+import { DEFAULT_SETTINGS, memoryPrompt, settingsOf, stopAll, timing } from './tasks'
 import { phoneTools } from './tools'
 
 const t = (key: string) => translate(settings.getLanguage(), key)
@@ -11,9 +14,41 @@ export default {
   id: 'phone-control',
   name: t('手机控制'),
   description: t('通过安卓伴侣连接并控制手机'),
-  version: '0.6.0',
+  version: '0.7.0',
+  startBackground,
   defaultSettings: { ...DEFAULT_SETTINGS },
   settingsSchema: [
+    { key: 'notify', type: 'heading', label: t('手机通知') },
+    {
+      key: 'notifyMode',
+      type: 'select',
+      label: t('通知反应'),
+      options: [
+        { value: 'off', label: t('关闭') },
+        { value: 'context', label: t('仅上下文') },
+        { value: 'react', label: t('自主反应') },
+      ],
+    },
+    { key: 'notifyApps', type: 'textarea', label: t('只关心这些应用'), hint: t('每行一个应用名或包名，留空表示全部') },
+    { key: 'notifyIgnore', type: 'textarea', label: t('忽略这些应用'), hint: t('每行一个应用名或包名') },
+    { key: 'quietHours', type: 'string', label: t('安静时段'), hint: t('例如 23:30-07:30，留空表示不限') },
+    { key: 'life', type: 'heading', label: t('作息') },
+    { key: 'routine', type: 'boolean', label: t('启用主动使用') },
+    { key: 'routineWindows', type: 'textarea', label: t('主动使用时段'), hint: t('每行 HH:MM-HH:MM，可以跨午夜') },
+    { key: 'routinePerDay', type: 'number', label: t('每天最多主动使用次数'), min: 0, max: 100, step: 1 },
+    { key: 'routineSkip', type: 'number', label: t('每个时段跳过概率'), min: 0, max: 1, step: 0.05 },
+    {
+      key: 'routineShare',
+      type: 'select',
+      label: t('主动使用后分享'),
+      options: [
+        { value: 'worth', label: t('值得才说') },
+        { value: 'always', label: t('总是分享') },
+        { value: 'never', label: t('从不分享') },
+      ],
+    },
+    { key: 'diaryTime', type: 'string', label: t('日记时间'), hint: t('当地时间 HH:MM') },
+    { key: 'timeZone', type: 'string', label: t('时区'), hint: t('IANA 时区，非法值回退 Asia/Shanghai') },
     { key: 'chatId', type: 'string', label: t('允许使用手机的会话 ID'), hint: t('留空时不向模型提供手机工具') },
     { key: 'operator', type: 'heading', label: t('操作员') },
     {
@@ -78,7 +113,15 @@ export default {
     // 绑定会话里注入近期的手机使用记忆，角色之后聊天能接得上「刚才刷到的」
     beforePrompt(input, ctx) {
       if (!ctx.chatId || ctx.chatId !== settingsOf(ctx.settings).chatId) return input
-      const content = memoryPrompt(ctx.storage, Date.now())
+      const now = timing.now(),
+        s = settingsOf(ctx.settings)
+      const content = [
+        memoryPrompt(ctx.storage, now),
+        notificationPrompt(ctx.storage, s, now),
+        profilePrompt(ctx.storage, now, s.timeZone),
+      ]
+        .filter(Boolean)
+        .join('\n\n')
       if (!content) return input
       return {
         ...input,

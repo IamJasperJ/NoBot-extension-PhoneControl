@@ -43,6 +43,9 @@ test('安装后的插件经过真实宿主完成配对与手机回报', async ()
     'operator.ts',
     'marks.ts',
     'tasks.ts',
+    'life.ts',
+    'notifications.ts',
+    'profile.ts',
   ])
     await copyFile(join(import.meta.dir, name), join(destination, name))
   await (await import('../../apps/server/src/bootstrap')).bootstrap()
@@ -58,7 +61,7 @@ test('安装后的插件经过真实宿主完成配对与手机回报', async ()
   expect(loaded?.loadError).toBeUndefined()
   expect(loaded?.id).toBe('phone-control')
   expect(loaded?.client).toEqual({ script: true, style: true })
-  registry.updateExtension('phone-control', { enabled: true, approvePermissions: true })
+  await registry.configureExtension('phone-control', { enabled: true, approvePermissions: true })
   const { app } = await import('../../apps/server/src/app')
   const clientAsset = await app.request('/api/extensions/phone-control/client.js')
   expect(clientAsset.status).toBe(200)

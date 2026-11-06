@@ -115,6 +115,40 @@ export const en = {
   后台: 'Background',
   记下的: 'Noted',
   配对成功: 'Pairing code generated',
+  手机生活: 'Phone life',
+  '角色把这台手机当作自己的：按作息主动使用、留意通知、记住手机里的事，每晚写一段日记。':
+    'The character treats this phone as its own: it picks it up on its own schedule, notices notifications, remembers what is on it and writes a diary every night.',
+  作息: 'Routine',
+  '主动使用没有开启，在「设置」的「作息」里打开。': 'Proactive use is off. Turn it on under Routine in Settings.',
+  '今天已主动使用 {count} 次': 'Used on its own {count} times today',
+  等待中: 'Waiting',
+  跳过了: 'Skipped',
+  错过了: 'Missed',
+  不想用: 'Not now',
+  用了: 'Used',
+  '上次决定（{time}）：': 'Last decision ({time}): ',
+  不用手机: 'Not using the phone',
+  回答无法识别: 'Unreadable answer',
+  手机档案: 'Phone profile',
+  最常用: 'Most used',
+  '已安装 {count} 个应用 · {time} 更新': '{count} apps installed · updated {time}',
+  '还没读取已安装的应用，手机在线且空闲时会自动读取。':
+    'Installed apps have not been read yet. They are read automatically when the phone is online and idle.',
+  档案笔记: 'Profile notes',
+  '每行一条，最多 40 条、每条 120 字。角色每次用完手机会自动整理，你也可以直接改。':
+    'One per line, up to 40 notes of 120 characters each. The character updates them after each phone session, and you can edit them too.',
+  '笔记最多 40 条、每条 120 字。': 'Up to 40 notes of 120 characters each.',
+  手机日记: 'Phone diary',
+  '还没有日记。当天用过手机或收到通知时，到了日记时间会写一段。':
+    'No diary yet. An entry is written at diary time on days with phone use or notifications.',
+  '最近 3 天的日记会作为长期记忆注入会话。':
+    'Entries from the last 3 days are injected into the chat as long-term memory.',
+  手机通知: 'Notifications',
+  清空: 'Clear',
+  确认清空: 'Confirm clear',
+  '还没有收到通知。手机伴侣 App 0.7.0 起会上报通知，在 App 的「角色专用机」里可以关闭。':
+    'No notifications yet. The companion app reports them from 0.7.0 on; you can turn this off under Dedicated phone in the app.',
+  已清空: 'Cleared',
   已撤销授权: 'Access revoked',
 }
 /** @param {string} key @param {Record<string, string>} [vars] */
@@ -1189,6 +1223,320 @@ export default function activate(api) {
     )
   }
 
+  /** @typedef {{label:string, packageName:string}} PhoneApp */
+  /** @typedef {{apps:PhoneApp[], appsAt:number, usage:Record<string,number>, notes:string[], updatedAt:number}} Profile */
+  /** @typedef {{window:string, at:number, end:number, status:'pending'|'skipped'|'missed'|'declined'|'used'}} RoutineWindow */
+  /** @typedef {{at:number, package:string, app:string, title:string, text:string}} PhoneNotification */
+  /** @typedef {{profile:Profile, diary:{date:string,text:string}[], notifications:PhoneNotification[], routine:{plan:RoutineWindow[], todayCount:number, lastDecision?:{at:number, decision:{use:boolean, goal:string}|null}}}} Life */
+
+  /** @param {number} at */
+  const clock = (at) => new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  /** 今天只显示时刻，更早的带上日期 @param {number} at */
+  const when = (at) =>
+    new Date(at).toDateString() === new Date().toDateString()
+      ? clock(at)
+      : new Date(at).toLocaleString([], { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+
+  /** @param {{life:Life, routineOn:boolean}} props */
+  function RoutineCard({ life, routineOn }) {
+    const names = /** @type {Record<string,[string,string]>} */ ({
+      pending: ['等待中', 'warn'],
+      skipped: ['跳过了', ''],
+      missed: ['错过了', ''],
+      declined: ['不想用', ''],
+      used: ['用了', 'good'],
+    })
+    const last = life.routine.lastDecision
+    return Card(
+      t('作息'),
+      routineOn
+        ? h(
+            'span',
+            { className: 'pc-muted' },
+            t('今天已主动使用 {count} 次', { count: String(life.routine.todayCount) }),
+          )
+        : null,
+      routineOn ? null : h('p', { className: 'pc-muted' }, t('主动使用没有开启，在「设置」的「作息」里打开。')),
+      routineOn && life.routine.plan.length
+        ? h(
+            'ul',
+            { className: 'pc-list' },
+            ...life.routine.plan.map((w) => {
+              const [label, tone] = names[w.status] ?? [w.status, '']
+              return h(
+                'li',
+                { key: `${w.window}-${w.at}`, className: 'pc-row between' },
+                h('span', { className: 'pc-mono' }, w.window),
+                h('span', { className: 'pc-muted pc-grow' }, w.status === 'skipped' ? '' : `≈ ${clock(w.at)}`),
+                h('span', { className: `pc-pill ${tone}` }, t(label)),
+              )
+            }),
+          )
+        : null,
+      routineOn && last
+        ? h(
+            'p',
+            { className: 'pc-muted' },
+            t('上次决定（{time}）：', { time: when(last.at) }),
+            last.decision
+              ? last.decision.use
+                ? h('span', { className: 'pc-text' }, last.decision.goal)
+                : t('不用手机')
+              : t('回答无法识别'),
+          )
+        : null,
+    )
+  }
+
+  /** @param {{profile:Profile, onSaved:()=>void}} props */
+  function ProfileCard({ profile, onSaved }) {
+    const saved = profile.notes.join('\n')
+    const [draft, setDraft] = useState(saved)
+    const [busy, setBusy] = useState(false)
+    // 服务端整理了新的笔记、而主人没在改时，跟着更新
+    const base = useRef(saved)
+    useEffect(() => {
+      setDraft((current) => (current === base.current ? saved : current))
+      base.current = saved
+    }, [saved])
+    const notes = draft
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+    const invalid = notes.length > 40 || notes.some((n) => n.length > 120)
+    async function save() {
+      setBusy(true)
+      try {
+        const response = await api.fetchServer('/profile/notes', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ notes }),
+        })
+        if (!response.ok) throw new Error()
+        base.current = notes.join('\n')
+        setDraft(base.current)
+        api.toast.info(t('已保存'))
+        onSaved()
+      } catch {
+        api.toast.error(t('请求失败'))
+      } finally {
+        setBusy(false)
+      }
+    }
+    const label = (/** @type {string} */ pkg) => profile.apps.find((a) => a.packageName === pkg)?.label ?? pkg
+    const top = Object.entries(profile.usage)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 8)
+    return Card(
+      t('手机档案'),
+      null,
+      top.length
+        ? h(
+            'div',
+            { className: 'pc-field' },
+            h('span', { className: 'pc-label' }, t('最常用')),
+            h(
+              'div',
+              { className: 'pc-row wrap' },
+              ...top.map(([pkg, count]) =>
+                h('span', { key: pkg, className: 'pc-tag', title: pkg }, label(pkg), h('b', null, String(count))),
+              ),
+            ),
+          )
+        : null,
+      h(
+        'span',
+        { className: 'pc-muted' },
+        profile.appsAt
+          ? t('已安装 {count} 个应用 · {time} 更新', { count: String(profile.apps.length), time: when(profile.appsAt) })
+          : t('还没读取已安装的应用，手机在线且空闲时会自动读取。'),
+      ),
+      h(
+        'div',
+        { className: 'pc-field' },
+        h('label', { className: 'pc-label', htmlFor: 'pc-notes' }, t('档案笔记')),
+        h('textarea', {
+          id: 'pc-notes',
+          rows: Math.min(14, Math.max(5, notes.length + 1)),
+          value: draft,
+          className: invalid ? 'invalid' : '',
+          onChange: (/** @type {{target: HTMLTextAreaElement}} */ event) => setDraft(event.target.value),
+        }),
+        h(
+          'div',
+          { className: 'pc-row between' },
+          h(
+            'span',
+            { className: invalid ? 'pc-warn' : 'pc-muted' },
+            invalid
+              ? t('笔记最多 40 条、每条 120 字。')
+              : t('每行一条，最多 40 条、每条 120 字。角色每次用完手机会自动整理，你也可以直接改。'),
+          ),
+          h(Button, {
+            label: t('保存'),
+            primary: true,
+            disabled: busy || invalid || draft === base.current,
+            onClick: () => void save(),
+          }),
+        ),
+      ),
+    )
+  }
+
+  /** @param {{diary:Life['diary']}} props */
+  function DiaryCard({ diary }) {
+    const list = [...diary].reverse()
+    return Card(
+      t('手机日记'),
+      null,
+      list.length
+        ? h(
+            'ul',
+            { className: 'pc-list' },
+            ...list.map((d) =>
+              h(
+                'li',
+                { key: d.date, className: 'pc-entry' },
+                h('span', { className: 'pc-label pc-mono' }, d.date),
+                h('p', null, d.text),
+              ),
+            ),
+          )
+        : h('p', { className: 'pc-muted' }, t('还没有日记。当天用过手机或收到通知时，到了日记时间会写一段。')),
+      list.length ? h('span', { className: 'pc-muted' }, t('最近 3 天的日记会作为长期记忆注入会话。')) : null,
+    )
+  }
+
+  /** @param {{list:PhoneNotification[], onCleared:()=>void}} props */
+  function NotificationCard({ list, onCleared }) {
+    const [confirming, setConfirming] = useState(false)
+    const [busy, setBusy] = useState(false)
+    async function clear() {
+      setBusy(true)
+      try {
+        const response = await api.fetchServer('/notifications/clear', { method: 'POST' })
+        if (!response.ok) throw new Error()
+        api.toast.info(t('已清空'))
+        setConfirming(false)
+        onCleared()
+      } catch {
+        api.toast.error(t('请求失败'))
+      } finally {
+        setBusy(false)
+      }
+    }
+    return Card(
+      t('手机通知'),
+      list.length
+        ? confirming
+          ? h(
+              'div',
+              { className: 'pc-row' },
+              h(Button, { label: t('取消'), ghost: true, disabled: busy, onClick: () => setConfirming(false) }),
+              h(Button, { label: t('确认清空'), danger: true, disabled: busy, onClick: () => void clear() }),
+            )
+          : h(Button, { label: t('清空'), onClick: () => setConfirming(true) })
+        : null,
+      list.length
+        ? h(
+            'ul',
+            { className: 'pc-list' },
+            ...list.map((n) =>
+              h(
+                'li',
+                { key: `${n.package}-${n.at}-${n.title}`, className: 'pc-entry' },
+                h(
+                  'div',
+                  { className: 'pc-row between' },
+                  h('strong', { className: 'pc-grow pc-clip', title: n.package }, n.app || n.package),
+                  h('span', { className: 'pc-muted' }, when(n.at)),
+                ),
+                n.title ? h('div', null, n.title) : null,
+                n.text ? h('p', { className: 'pc-muted pc-clamp' }, n.text) : null,
+              ),
+            ),
+          )
+        : h(
+            'p',
+            { className: 'pc-muted' },
+            t('还没有收到通知。手机伴侣 App 0.7.0 起会上报通知，在 App 的「角色专用机」里可以关闭。'),
+          ),
+    )
+  }
+
+  function LifePage() {
+    const [life, setLife] = useState(/** @type {Life|null} */ (null))
+    const [routineOn, setRoutineOn] = useState(false)
+    const [error, setError] = useState(false)
+    const live = useRef(true)
+    const load = useMemo(
+      () => () =>
+        Promise.all([
+          api.fetchServer('/life').then((r) => (r.ok ? r.json() : Promise.reject(new Error()))),
+          api.getSettings(),
+        ])
+          .then(([data, settings]) => {
+            if (!live.current) return
+            setLife(/** @type {Life} */ (data))
+            setRoutineOn(settings.routine === true)
+            setError(false)
+          })
+          .catch(() => live.current && setError(true)),
+      [],
+    )
+    useEffect(() => {
+      live.current = true
+      void load()
+      const timer = setInterval(() => {
+        if (!document.hidden) void load()
+      }, 10000)
+      return () => {
+        live.current = false
+        clearInterval(timer)
+      }
+    }, [load])
+    return h(
+      'div',
+      { className: 'pc pc-page' },
+      h(
+        'header',
+        { className: 'pc-head' },
+        h(
+          'div',
+          { className: 'pc-grow' },
+          h('h3', null, t('手机生活')),
+          h(
+            'p',
+            { className: 'pc-muted' },
+            t('角色把这台手机当作自己的：按作息主动使用、留意通知、记住手机里的事，每晚写一段日记。'),
+          ),
+        ),
+        h(Button, { label: t('刷新'), onClick: () => void load() }),
+      ),
+      error ? h('p', { role: 'alert', className: 'pc-error' }, t('请求失败')) : null,
+      !life
+        ? error
+          ? null
+          : h('p', { className: 'pc-muted' }, t('正在读取'))
+        : h(
+            'div',
+            { className: 'pc-grid' },
+            h(
+              'div',
+              { className: 'pc-col' },
+              h(ProfileCard, { profile: life.profile, onSaved: () => void load() }),
+              h(DiaryCard, { diary: life.diary }),
+            ),
+            h(
+              'div',
+              { className: 'pc-col' },
+              h(RoutineCard, { life, routineOn }),
+              h(NotificationCard, { list: life.notifications, onCleared: () => void load() }),
+            ),
+          ),
+    )
+  }
+
   function PairingPage() {
     const [state, setState] = useState(
       /** @type {State} */ ({ status: null, pair: null, handle: '', busy: false, error: '' }),
@@ -1298,6 +1646,7 @@ export default function activate(api) {
     )
   }
   api.registerPage({ id: 'pairing', label: t('配对管理'), icon: '📱', render: () => h(PairingPage) })
+  api.registerPage({ id: 'life', label: t('手机生活'), icon: '🌙', render: () => h(LifePage) })
   api.registerSlot('extensions.settings.footer', {
     id: 'pairing-link',
     render: () =>

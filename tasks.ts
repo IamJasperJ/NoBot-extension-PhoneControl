@@ -3,9 +3,21 @@ import { Bridge } from './bridge'
 import { delay, runCommand } from './commands'
 import { markScreenshot } from './marks'
 import { type EndReason, type Permission, type Policy, type Report, runOperator, type Step } from './operator'
+import { profileOf, recordUsage, shouldShare, updateNotes } from './profile'
 
 /** 插件设置（已合并默认值、限定范围） */
 export interface PhoneSettings {
+  notifyMode: 'off' | 'context' | 'react'
+  notifyApps: string
+  notifyIgnore: string
+  quietHours: string
+  diaryTime: string
+  timeZone: string
+  routine: boolean
+  routineWindows: string
+  routinePerDay: number
+  routineSkip: number
+  routineShare: 'worth' | 'always' | 'never'
   chatId: string
   operatorConnectionId: string
   operatorModel: string
@@ -25,6 +37,17 @@ export interface PhoneSettings {
 }
 
 export const DEFAULT_SETTINGS: PhoneSettings = {
+  notifyMode: 'react',
+  notifyApps: '',
+  notifyIgnore: '',
+  quietHours: '',
+  diaryTime: '23:30',
+  timeZone: 'Asia/Shanghai',
+  routine: false,
+  routineWindows: '08:30-09:30\n12:30-13:30\n18:30-19:30\n21:30-23:30',
+  routinePerDay: 4,
+  routineSkip: 0.2,
+  routineShare: 'worth',
   chatId: '',
   operatorConnectionId: '',
   operatorModel: '',
@@ -47,6 +70,20 @@ const range = (v: unknown, min: number, max: number, fallback: number) =>
 export function settingsOf(raw: Record<string, unknown>): PhoneSettings {
   const str = (key: keyof PhoneSettings) => (typeof raw[key] === 'string' ? (raw[key] as string).trim() : '')
   return {
+    notifyMode: raw.notifyMode === 'off' || raw.notifyMode === 'context' ? raw.notifyMode : 'react',
+    notifyApps: str('notifyApps'),
+    notifyIgnore: str('notifyIgnore'),
+    quietHours: str('quietHours'),
+    diaryTime: /^([01]\d|2[0-3]):[0-5]\d$/.test(str('diaryTime')) ? str('diaryTime') : '23:30',
+    timeZone: validTimeZone(str('timeZone')),
+    routine: raw.routine === true,
+    routineWindows: typeof raw.routineWindows === 'string' ? raw.routineWindows : DEFAULT_SETTINGS.routineWindows,
+    routinePerDay: range(raw.routinePerDay, 0, 100, 4),
+    routineSkip:
+      typeof raw.routineSkip === 'number' && Number.isFinite(raw.routineSkip)
+        ? Math.max(0, Math.min(1, raw.routineSkip))
+        : 0.2,
+    routineShare: raw.routineShare === 'always' || raw.routineShare === 'never' ? raw.routineShare : 'worth',
     chatId: str('chatId'),
     operatorConnectionId: str('operatorConnectionId'),
     operatorModel: str('operatorModel'),
@@ -62,6 +99,16 @@ export function settingsOf(raw: Record<string, unknown>): PhoneSettings {
     blockedApps: typeof raw.blockedApps === 'string' ? raw.blockedApps : '',
     blockedWords: typeof raw.blockedWords === 'string' ? raw.blockedWords : '',
   }
+}
+
+export function validTimeZone(value: string) {
+  try {
+    if (value) {
+      new Intl.DateTimeFormat('en', { timeZone: value })
+      return value
+    }
+  } catch {}
+  return 'Asia/Shanghai'
 }
 
 const lines = (text: string) =>
@@ -89,6 +136,7 @@ export interface TaskState {
   chatId: string
   goal: string
   mode: 'wait' | 'background'
+  source?: 'routine' | 'notification'
   status: 'running' | EndReason
   startedAt: number
   endedAt?: number
@@ -107,13 +155,14 @@ export interface Memory {
 }
 
 /** 等待时长倍率：测试里设成 0，跳过拟人停顿 */
-export const timing = { scale: 1 }
+export const timing = { scale: 1, now: Date.now, random: Math.random }
 
 const STEPS_KEPT = 40
 const MEMORIES_KEPT = 8
 
 /** 正在跑的任务的中止开关。只能放内存；按设备 id 区分用户（每个用户只有一台配对设备）。 */
 const running = new Map<string, AbortController>()
+const maintenance = new Set<string>()
 
 const deviceId = (storage: ExtensionStorage) => storage.get<{ id: string }>('device')?.id ?? ''
 
@@ -122,6 +171,17 @@ export function currentTask(storage: ExtensionStorage) {
   // 进程重启后内存里的任务没了，存储里还写着 running 的要纠正
   if (task?.status === 'running' && !running.has(deviceId(storage))) return { ...task, status: 'stopped' as const }
   return task ?? null
+}
+
+/** 应用列表刷新持有短租约，手机任务不能抢占它。 */
+export function reservePhone(storage: ExtensionStorage) {
+  const key = deviceId(storage)
+  if (!key || running.has(key) || maintenance.has(key)) return null
+  maintenance.add(key)
+  return () => maintenance.delete(key)
+}
+export function phoneBusy(storage: ExtensionStorage) {
+  return running.has(deviceId(storage)) || maintenance.has(deviceId(storage))
 }
 
 export function stopTask(storage: ExtensionStorage) {
@@ -157,6 +217,8 @@ export function startTask(
     minutes: number
     mode: 'wait' | 'background'
     signal?: AbortSignal
+    source?: 'routine' | 'notification'
+    tracked?: boolean
   },
 ): Promise<Report> {
   const storage = ctx.storage
@@ -164,14 +226,16 @@ export function startTask(
   const settings = settingsOf(ctx.settings)
   if (!key) throw new Error('DEVICE_OFFLINE')
   const active = currentTask(storage)
-  if (active?.status === 'running') throw new PhoneBusyError(active.goal)
-
-  const controller = new AbortController()
-  // wait 模式跟随工具调用：生成被中止时任务也停
-  input.signal?.addEventListener('abort', () => controller.abort(), { once: true })
-  running.set(key, controller)
+  if (phoneBusy(storage)) throw new PhoneBusyError(active?.goal ?? 'Phone maintenance')
 
   const info = ctx.host.getChatInfo(input.chatId, 1)
+  const controller = new AbortController()
+  // wait 模式跟随工具调用：生成被中止时任务也停
+  const abort = () => controller.abort()
+  input.signal?.addEventListener('abort', abort, { once: true })
+  if (input.signal?.aborted) controller.abort()
+  running.set(key, controller)
+
   const speaker = info.characters.find((c) => c.id === input.speakerId) ?? info.characters[0]
   const persona = [speaker?.personality, speaker?.description].filter(Boolean).join('\n')
   const state: TaskState = {
@@ -179,24 +243,38 @@ export function startTask(
     chatId: input.chatId,
     goal: input.goal,
     mode: input.mode,
+    source: input.source,
     status: 'running',
-    startedAt: Date.now(),
+    startedAt: timing.now(),
     steps: [],
   }
   storage.set('task', state)
-  const bridge = new Bridge(storage)
+  const bridge = new Bridge(storage, timing.now)
 
+  const used = new Set<string>()
   const job = runOperator(
     {
       goal: input.goal,
       name: speaker?.name ?? 'the user',
       persona,
+      phoneNotes: profileOf(storage).notes,
+      installedApps: profileOf(storage).apps,
       maxSteps: settings.maxSteps,
       maxMs: input.minutes * 60_000,
       policy: policyOf(settings),
     },
     {
-      act: (command) => runCommand(bridge, command, controller.signal, state.id),
+      act: async (command) => {
+        const result = await runCommand(bridge, command, controller.signal, state.id)
+        if (result.ok) {
+          const pkg = command.action === 'open' ? command.packageName : result.data?.packageName
+          if (typeof pkg === 'string' && pkg && !used.has(pkg)) {
+            used.add(pkg)
+            recordUsage(storage, pkg, timing.now())
+          }
+        }
+        return result
+      },
       think: (messages, image) =>
         ctx.host.complete({
           chatId: input.chatId,
@@ -210,8 +288,8 @@ export function startTask(
         }),
       mark: markScreenshot,
       sleep: (ms) => delay(ms * timing.scale, controller.signal),
-      now: Date.now,
-      random: Math.random,
+      now: timing.now,
+      random: timing.random,
       onStep(step) {
         state.steps = [...state.steps, step].slice(-STEPS_KEPT)
         storage.set('task', state)
@@ -219,10 +297,10 @@ export function startTask(
     },
     controller.signal,
   )
-    .then((report) => {
+    .then(async (report) => {
       Object.assign(state, {
         status: report.endReason,
-        endedAt: Date.now(),
+        endedAt: timing.now(),
         summary: report.summary,
         memories: report.memories,
       })
@@ -237,7 +315,7 @@ export function startTask(
               summary: report.summary,
               memories: report.memories,
               endReason: report.endReason,
-              at: Date.now(),
+              at: timing.now(),
             },
           ].slice(-MEMORIES_KEPT),
         )
@@ -246,7 +324,7 @@ export function startTask(
     .catch((error) => {
       Object.assign(state, {
         status: 'error',
-        endedAt: Date.now(),
+        endedAt: timing.now(),
         summary: error instanceof Error ? error.message : 'FAILED',
       })
       storage.set('task', state)
@@ -256,19 +334,23 @@ export function startTask(
       if (running.get(key) === controller) running.delete(key)
     })
 
-  if (input.mode === 'background')
-    job
-      .then((report) => announce(ctx, input.chatId, input.speakerId, report))
-      .catch((error) =>
-        ctx.host.log({
-          chatId: input.chatId,
-          kind: 'extension',
-          status: 'error',
-          summary: 'phone task failed',
-          response: { error: error instanceof Error ? error.message : String(error) },
-        }),
-      )
-  return job
+  // 档案笔记的提炼在任务结束后另走一路：不拖慢等结果模式的工具返回，也不占着手机
+  const notes = job
+    .then((report) =>
+      report.endReason === 'stopped' ? undefined : updateNotes(ctx, describeReport(report), controller.signal),
+    )
+    .catch(() => {})
+  const completion = job
+    .then(async (report) => {
+      if (input.mode === 'background' && (await shouldShare(ctx, input.source, report, controller.signal)))
+        await announce(ctx, input.chatId, input.speakerId, report, controller.signal)
+      // 后台（定时任务里）要等提炼做完再返回，宿主才能追踪
+      if (input.mode === 'background') await notes
+      return report
+    })
+    .finally(() => input.signal?.removeEventListener('abort', abort))
+  if (input.mode === 'background' && !input.tracked) completion.catch(() => {})
+  return input.mode === 'background' && !input.tracked ? job : completion
 }
 
 const END_TEXT: Record<EndReason, string> = {
@@ -293,19 +375,26 @@ export function describeReport(report: Report) {
 }
 
 /** 后台任务结束：等会话空闲后让角色主动开口（这条指令只用一次，不入库） */
-async function announce(ctx: ExtensionContext, chatId: string, speakerId: string | undefined, report: Report) {
-  if (report.endReason === 'stopped') return
+async function announce(
+  ctx: ExtensionContext,
+  chatId: string,
+  speakerId: string | undefined,
+  report: Report,
+  signal: AbortSignal,
+) {
+  if (signal.aborted || report.endReason === 'stopped') return
   const instruction = `[Phone] You just put your phone down. ${describeReport(report)}
 
 Continue the conversation naturally as yourself, like a person who just finished using their phone: mention what you did or found only if it is worth sharing, briefly and casually, in your own voice. Do not start another phone task right now unless the user asks. Write in the same language as the conversation.`
   for (let attempt = 0; attempt < 5; attempt++) {
     try {
       await ctx.host.waitIdle(chatId, 10 * 60_000)
+      if (signal.aborted) return
       ctx.host.trigger(chatId, { ...(speakerId ? { speakerId } : {}), instruction })
       return
     } catch {
       // 用户刚好又在生成，过一会儿再试
-      await new Promise((resolve) => setTimeout(resolve, 5000))
+      await delay(5000 * timing.scale, signal).catch(() => {})
     }
   }
 }
@@ -319,7 +408,7 @@ export function memoryPrompt(storage: ExtensionStorage, now: number) {
       `Right now you are using your phone: ${task.goal} (started ${Math.max(1, Math.round((now - task.startedAt) / 60000))} min ago).`,
     )
   const recent = recentMemories(storage).filter((m) => now - m.at < 24 * 3600_000)
-  for (const m of recent.slice(-5)) {
+  for (const m of recent.slice(-8)) {
     const ago = Math.round((now - m.at) / 60000)
     const when = ago < 60 ? `${Math.max(1, ago)} min ago` : `${Math.round(ago / 60)} h ago`
     lines.push(`- ${when}, ${m.goal}: ${m.summary}${m.memories.length ? ` Noticed: ${m.memories.join('; ')}` : ''}`)

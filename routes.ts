@@ -4,8 +4,11 @@ import type { Context, Hono } from '../../apps/server/node_modules/hono'
 import type { ExtensionContext, ExtensionStorage } from '../../apps/server/src/extensions/types'
 import { Bridge, parseResumed } from './bridge'
 import { connections } from './host'
-import { object, parseCommand, parseResult } from './protocol'
-import { currentTask, recentMemories, settingsOf, stopTask } from './tasks'
+import { type RoutinePlan, routineOf } from './life'
+import { type DiaryEntry, type PhoneProfile, profileOf, validNotes } from './profile'
+import type { PhoneNotification } from './protocol'
+import { object, parseCommand, parseNotifications, parseResult } from './protocol'
+import { currentTask, recentMemories, settingsOf, stopTask, timing } from './tasks'
 
 /** 限制实际读取字节，不信任客户端声明的 Content-Length。 */
 async function body(c: Context, limit = 16_384) {
@@ -49,8 +52,58 @@ export function localAddresses(interfaces = networkInterfaces(), inDocker = exis
 
 type Translate = (key: string) => string
 
+/** 管理端 GET /life 的响应；通知按时间倒序，plan 为当天时段。 */
+export interface LifeResponse {
+  profile: PhoneProfile
+  diary: DiaryEntry[]
+  notifications: PhoneNotification[]
+  routine: { plan: RoutinePlan['windows']; todayCount: number; lastDecision?: RoutinePlan['lastDecision'] }
+}
+export interface ProfileNotesInput {
+  notes: string[]
+}
+export interface MutationResponse {
+  ok: true
+}
+
 /** 操作员任务的查看 / 停止，以及设置表单的连接、模型候选 */
 export function registerTaskRoutes(app: Hono, ctx: Omit<ExtensionContext, 'chatId'>, t: Translate) {
+  app.use('*', async (c, next) => {
+    c.header('Cache-Control', 'no-store')
+    await next()
+  })
+  app.get('/life', (c) => {
+    const plan = routineOf({ ...ctx, chatId: '' }, timing.now())
+    const result: LifeResponse = {
+      profile: profileOf(ctx.storage),
+      diary: ctx.storage.get<DiaryEntry[]>('diary') ?? [],
+      notifications: (ctx.storage.get<PhoneNotification[]>('notifications') ?? [])
+        .filter((n) => timing.now() - n.at <= 3 * 86400_000)
+        .slice(-50)
+        .reverse(),
+      routine: { plan: plan.windows, todayCount: plan.todayCount, lastDecision: plan.lastDecision },
+    }
+    return c.json(result)
+  })
+  app.post('/profile/notes', async (c) => {
+    try {
+      const input = await body(c)
+      if (!validNotes(input.notes)) throw new Error('INVALID_INPUT')
+      ctx.storage.set('profile', {
+        ...profileOf(ctx.storage),
+        notes: [...new Set(input.notes)],
+        updatedAt: timing.now(),
+      })
+      return c.json({ ok: true } satisfies MutationResponse)
+    } catch {
+      return c.json({ code: 'INVALID_INPUT', message: t('请求无效') }, 400)
+    }
+  })
+  app.post('/notifications/clear', (c) => {
+    ctx.storage.delete('notifications')
+    ctx.storage.delete('notificationPending')
+    return c.json({ ok: true } satisfies MutationResponse)
+  })
   app.get('/task', (c) => c.json({ task: currentTask(ctx.storage), memories: recentMemories(ctx.storage) }))
   app.post('/task/stop', (c) => {
     stopTask(ctx.storage)
@@ -138,11 +191,16 @@ export function registerRoutes(app: Hono, storage: ExtensionStorage, t: Translat
   app.post(
     '/poll',
     guard(async (c) => {
-      const v = await body(c)
+      const v = await body(c, 200_000)
       if (v.protocol !== 1 || typeof v.ready !== 'boolean') return c.json({ code: 'PROTOCOL_MISMATCH' }, 400)
       return c.json({
         protocol: 1,
-        job: bridge.poll(c.req.header('X-Device-Id') ?? '', v.ready, parseResumed(v.resumed)),
+        job: bridge.poll(
+          c.req.header('X-Device-Id') ?? '',
+          v.ready,
+          parseResumed(v.resumed),
+          parseNotifications(v.notifications),
+        ),
       })
     }),
   )

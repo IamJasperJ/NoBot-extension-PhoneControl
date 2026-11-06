@@ -126,3 +126,41 @@ export function parseResult(value: unknown): Result {
   }
   return { ok: v.ok, code: v.code, data, image }
 }
+
+/** 手机通知只作为不可信数据保存，不解释其中的指令。 */
+export interface PhoneNotification {
+  at: number
+  package: string
+  app: string
+  title: string
+  text: string
+}
+
+export function parseNotifications(value: unknown): PhoneNotification[] {
+  if (value === undefined) return []
+  if (!Array.isArray(value)) throw new Error('INVALID_INPUT')
+  return value.slice(0, 20).flatMap((item: unknown) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return []
+    const v = item as Record<string, unknown>
+    if (
+      typeof v.at !== 'number' ||
+      !Number.isFinite(v.at) ||
+      !Number.isFinite(new Date(v.at).getTime()) ||
+      v.at < 0 ||
+      typeof v.package !== 'string' ||
+      typeof v.app !== 'string' ||
+      typeof v.title !== 'string' ||
+      typeof v.text !== 'string'
+    )
+      return []
+    return [
+      {
+        at: v.at,
+        package: v.package.slice(0, 200),
+        app: v.app.slice(0, 100),
+        title: v.title.slice(0, 200),
+        text: v.text.slice(0, 1000),
+      },
+    ]
+  })
+}

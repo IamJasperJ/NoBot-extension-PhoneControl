@@ -1,6 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import type { ExtensionStorage } from '../../apps/server/src/extensions/types'
-import type { Command, Result } from './protocol'
+import type { Command, PhoneNotification, Result } from './protocol'
 import { object } from './protocol'
 
 export type DisconnectCause = 'frozen' | 'network' | 'restarted' | 'paused' | 'unknown'
@@ -56,6 +56,10 @@ export class Bridge {
   constructor(
     private storage: ExtensionStorage,
     private now: () => number = Date.now,
+    private onNotifications = (items: PhoneNotification[]) => {
+      const pending = storage.get<{ items: PhoneNotification[] }>('notificationPending')
+      storage.set('notificationPending', { at: this.now(), items: [...(pending?.items ?? []), ...items].slice(-100) })
+    },
   ) {}
 
   pair() {
@@ -98,10 +102,27 @@ export class Bridge {
     return this.storage.get<Disconnect[]>('disconnects') ?? []
   }
 
-  poll(id: string, ready: boolean, resumed?: NonNullable<ReturnType<typeof parseResumed>>) {
+  poll(
+    id: string,
+    ready: boolean,
+    resumed?: NonNullable<ReturnType<typeof parseResumed>>,
+    notifications: PhoneNotification[] = [],
+  ) {
     const device = this.storage.get<Device>('device')
     if (!device || device.id !== id) throw new Error('UNAUTHORIZED')
     const at = this.now()
+    const saved = (this.storage.get<PhoneNotification[]>('notifications') ?? []).filter(
+      (n) => at - n.at <= 3 * 86400_000,
+    )
+    const keys = new Set(saved.map((n) => JSON.stringify([n.package, n.title, n.text, n.at])))
+    const fresh = notifications.filter((n) => {
+      const key = JSON.stringify([n.package, n.title, n.text, n.at])
+      if (keys.has(key) || at - n.at > 3 * 86400_000) return false
+      keys.add(key)
+      return true
+    })
+    this.storage.set('notifications', [...saved, ...fresh].sort((a, b) => a.at - b.at).slice(-100))
+    if (fresh.length) this.onNotifications(fresh)
     const gapMs = at - device.lastSeen
     if ((device.lastSeen > 0 && gapMs > 30_000) || resumed) {
       const disconnect: Disconnect = {

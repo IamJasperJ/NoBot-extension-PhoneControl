@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, test } from 'bun:test'
 import type { ExtensionContext } from '../../apps/server/src/extensions/types'
 import { Bridge } from './bridge'
+import { profileOf } from './profile'
 import { currentTask, memoryPrompt, policyOf, recentMemories, settingsOf, stopAll, timing } from './tasks'
 import { phoneTools } from './tools'
 
@@ -135,6 +136,7 @@ describe('模型工具', () => {
       '{"thought":"够了","action":{"type":"done","summary":"看了推荐页，刷到一个猫猫视频。"}}',
     ]
     const prompts: string[] = []
+    const systems: string[] = []
     const ctx = context(
       {},
       {
@@ -142,11 +144,17 @@ describe('模型工具', () => {
           characters: [{ id: 'c1', name: '小雪', personality: '喜欢猫', description: '' }],
         })) as unknown as ExtensionContext['host']['getChatInfo'],
         complete: async (opts) => {
+          systems.push(opts.messages[0]?.content ?? '')
           prompts.push(opts.messages.at(-1)?.content ?? '')
           return replies.shift() ?? '{"action":{"type":"done","summary":""}}'
         },
       },
     )
+    ctx.storage.set('profile', {
+      ...profileOf(ctx.storage),
+      notes: ['Account catfan'],
+      apps: [{ label: 'Bili', packageName: 'tv.danmaku.bili' }],
+    })
     const bridge = new Bridge(ctx.storage)
     const pair = bridge.pair()
     bridge.poll(pair.deviceId, true)
@@ -168,11 +176,15 @@ describe('模型工具', () => {
       expect(prompts[0]).toContain('猫猫视频')
       expect(currentTask(ctx.storage)?.status).toBe('done')
       expect(currentTask(ctx.storage)?.steps.length).toBe(3)
+      expect(systems[0]).toContain('Account catfan')
+      expect(systems[0]).toContain('Bili')
+      expect(profileOf(ctx.storage).usage['tv.danmaku.bili']).toBe(1)
       expect(recentMemories(ctx.storage)[0]?.memories).toEqual(['刷到一个猫猫视频'])
       expect(memoryPrompt(ctx.storage, Date.now())).toContain('刷会儿 B 站')
       await tool(ctx, 'phone_task')?.run({ goal: '再看一次', wait: true }, toolCtx(ctx))
       expect(taskIds.at(-1)).toBe(currentTask(ctx.storage)?.id)
       expect(taskIds.at(-1)).not.toBe(completedTask.id)
+      expect(profileOf(ctx.storage).usage['tv.danmaku.bili']).toBe(2)
     } finally {
       stop()
     }
