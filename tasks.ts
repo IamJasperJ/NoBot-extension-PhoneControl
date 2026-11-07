@@ -74,15 +74,14 @@ export function settingsOf(raw: Record<string, unknown>): PhoneSettings {
     notifyApps: str('notifyApps'),
     notifyIgnore: str('notifyIgnore'),
     quietHours: str('quietHours'),
-    diaryTime: /^([01]\d|2[0-3]):[0-5]\d$/.test(str('diaryTime')) ? str('diaryTime') : '23:30',
+    diaryTime:
+      str('diaryTime') === 'off' || /^([01]\d|2[0-3]):[0-5]\d$/.test(str('diaryTime')) ? str('diaryTime') : '23:30',
     timeZone: validTimeZone(str('timeZone')),
     routine: raw.routine === true,
     routineWindows: typeof raw.routineWindows === 'string' ? raw.routineWindows : DEFAULT_SETTINGS.routineWindows,
     routinePerDay: range(raw.routinePerDay, 0, 100, 4),
-    routineSkip:
-      typeof raw.routineSkip === 'number' && Number.isFinite(raw.routineSkip)
-        ? Math.max(0, Math.min(1, raw.routineSkip))
-        : 0.2,
+    // 设置页是下拉框 routineSkipChance（字符串）；旧版本存的 routineSkip 是数字，没有新值时沿用
+    routineSkip: chance(raw.routineSkipChance) ?? chance(raw.routineSkip) ?? 0.2,
     routineShare: raw.routineShare === 'always' || raw.routineShare === 'never' ? raw.routineShare : 'worth',
     chatId: str('chatId'),
     operatorConnectionId: str('operatorConnectionId'),
@@ -99,6 +98,12 @@ export function settingsOf(raw: Record<string, unknown>): PhoneSettings {
     blockedApps: typeof raw.blockedApps === 'string' ? raw.blockedApps : '',
     blockedWords: typeof raw.blockedWords === 'string' ? raw.blockedWords : '',
   }
+}
+
+/** 0–1 的概率，接受数字或数字字符串；无效时返回 undefined */
+function chance(value: unknown) {
+  const n = typeof value === 'string' && value.trim() ? Number(value) : typeof value === 'number' ? value : Number.NaN
+  return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : undefined
 }
 
 export function validTimeZone(value: string) {

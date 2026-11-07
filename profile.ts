@@ -159,7 +159,7 @@ export async function updateNotes(
 }
 export async function writeDiary(ctx: ExtensionContext, signal: AbortSignal, now = timing.now()) {
   const s = settingsOf(ctx.settings)
-  if (!s.chatId || signal.aborted) return
+  if (!s.chatId || s.diaryTime === 'off' || signal.aborted) return
   const date = localTime(now, s.timeZone).date
   const diary = ctx.storage.get<DiaryEntry[]>('diary') ?? []
   if (diary.some((d) => d.date === date)) return

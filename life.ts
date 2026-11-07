@@ -167,7 +167,8 @@ export const startBackground: NonNullable<Extension['startBackground']> = (ctx, 
       {
         id: 'phone-diary',
         name: '手机日记 / Phone diary',
-        schedule: { kind: 'daily', time: s.diaryTime, timeZone: s.timeZone },
+        // 「不写日记」时任务照常注册（时间随便给一个），到点由 writeDiary 跳过
+        schedule: { kind: 'daily', time: s.diaryTime === 'off' ? '23:30' : s.diaryTime, timeZone: s.timeZone },
         misfire: 'skip',
       },
       async (taskSignal) => {

@@ -348,6 +348,21 @@ test('作息跨午夜计划、跳过概率、随机时刻、日期变更继承�
   expect(generatePlan(s, Date.parse('2026-11-08T00:00:00+08:00'), () => 0.5, plan).windows).toHaveLength(2)
 })
 
+test('设置页的下拉值：跳过概率是字符串、日记可以关掉', async () => {
+  expect(settingsOf({ routineSkipChance: '0.5' }).routineSkip).toBe(0.5)
+  expect(settingsOf({ routineSkipChance: '0.5', routineSkip: 0.8 }).routineSkip).toBe(0.5)
+  // 旧版本存的数字仍然有效
+  expect(settingsOf({ routineSkip: 0.8 }).routineSkip).toBe(0.8)
+  expect(settingsOf({ routineSkipChance: '' }).routineSkip).toBe(0.2)
+  expect(settingsOf({ routineSkipChance: 'x' }).routineSkip).toBe(0.2)
+  expect(settingsOf({ diaryTime: 'off' }).diaryTime).toBe('off')
+  expect(settingsOf({ diaryTime: '25:00' }).diaryTime).toBe('23:30')
+  const t = context({ diaryTime: 'off' })
+  recordUsage(t.ctx.storage, 'com.chat.app', NOW)
+  await writeDiary(t.ctx, signal, NOW)
+  expect(t.calls.quiet).toHaveLength(0)
+})
+
 test('当天改了作息设置会按新时段重排，已用次数保留', () => {
   const t = context({ routineWindows: '13:00-14:00', routineSkip: 0 })
   const first = routineOf(t.ctx, NOW, () => 0.5)
