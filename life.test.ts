@@ -333,11 +333,17 @@ test('作息跨午夜计划、跳过概率、随机时刻、日期变更继承�
   const morning = Date.parse('2026-11-07T00:00:00+08:00')
   const plan = generatePlan(s, morning, () => 0.5)
   expect(plan.windows[0]).toMatchObject({
-    at: Date.parse('2026-11-08T00:30:00+08:00'),
+    at: Date.parse('2026-11-08T00:25:00+08:00'),
     end: Date.parse('2026-11-08T01:30:00+08:00'),
     status: 'pending',
   })
   expect(generatePlan({ ...s, routineSkip: 1 }, morning, () => 0.5).windows[0]?.status).toBe('skipped')
+  // 随机数取到最大时也离时段结束至少 10 分钟；短时段留一半
+  expect(generatePlan(s, morning, () => 0.999999).windows[0]?.at).toBeLessThanOrEqual(
+    Date.parse('2026-11-08T01:20:00+08:00'),
+  )
+  const short = generatePlan({ ...s, routineWindows: '12:00-12:04' }, morning, () => 0.999999).windows[0]
+  expect(short && short.end - short.at).toBeGreaterThanOrEqual(120_000)
   expect(generatePlan(s, Date.parse('2026-11-08T00:00:00+08:00'), () => 0.5, plan).windows).toHaveLength(2)
 })
 

@@ -48,7 +48,9 @@ export function generatePlan(s: PhoneSettings, now: number, random: () => number
     const start = zonedMinute(date, pair[0], s.timeZone)
     const end = zonedMinute(date, pair[1] + (pair[1] < pair[0] ? 1440 : 0), s.timeZone)
     const skip = random() < s.routineSkip
-    const at = start + Math.floor(Math.max(0, Math.min(0.999999, random())) * (end - start))
+    // 随机时刻不落在时段最后 10 分钟（短时段留一半）：作息每 5 分钟才检查一次，太靠后会来不及开始就算错过
+    const span = end - start - Math.min(600_000, (end - start) / 2)
+    const at = start + Math.floor(Math.max(0, Math.min(0.999999, random())) * span)
     windows.push({ window, at, end, status: skip ? 'skipped' : at < now ? 'missed' : 'pending' })
   }
   return { date, windows, todayCount: 0, key: planKey(s) }
