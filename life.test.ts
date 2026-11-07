@@ -232,7 +232,17 @@ test('通知频率限制每十分钟一次、每天二十次、隔日恢复；�
     t.ctx.storage.set('notificationRate', rate)
     await reactNotifications(t.ctx, signal, NOW, t.start)
     expect(t.calls.quiet).toHaveLength(0)
+    // 冷却中的通知留着等冷却结束；当天次数用完的直接丢掉
+    expect(!!t.ctx.storage.get('notificationPending')).toBe(rate.count < 20)
   }
+  const cooling = context()
+  cooling.answer('{"action":"mention"}')
+  pending(cooling.ctx)
+  cooling.ctx.storage.set('notificationRate', { date: '2026-11-07', count: 1, last: NOW - 300_000 })
+  await reactNotifications(cooling.ctx, signal, NOW, cooling.start)
+  expect(cooling.calls.quiet).toHaveLength(0)
+  await reactNotifications(cooling.ctx, signal, NOW + 300_000, cooling.start)
+  expect(cooling.calls.triggers).toHaveLength(1)
   const t = context()
   t.answer('{"action":"mention"}')
   pending(t.ctx)
@@ -343,9 +353,25 @@ test('当天改了作息设置会按新时段重排，已用次数保留', () =>
   expect(changed.todayCount).toBe(2)
 })
 
+test('旧版本存的计划（没有 key）也按当前设置重排，没变的时段保留状态', () => {
+  const t = context({ routineWindows: '11:00-13:00\n15:00-16:00', routineSkip: 0 })
+  const kept = { window: '11:00-13:00', at: NOW - 1000, end: NOW + 3600_000, status: 'used' as const }
+  t.ctx.storage.set('routinePlan', {
+    date: '2026-11-07',
+    todayCount: 1,
+    windows: [kept, { window: '08:30-09:30', at: NOW - 9e6, end: NOW - 8e6, status: 'missed' }],
+  })
+  const plan = routineOf(t.ctx, NOW, () => 0.5)
+  expect(plan.windows.map((w) => w.window)).toEqual(['11:00-13:00', '15:00-16:00'])
+  expect(plan.windows[0]).toEqual(kept)
+  expect(plan.windows[1]?.status).toBe('pending')
+  expect(plan.todayCount).toBe(1)
+  expect(routineOf(t.ctx, NOW + 1000, () => 0.1)).toEqual(plan)
+})
+
 test('作息每天上限、错过时段不补、拒绝和主动任务来源', async () => {
   for (const use of [false, true]) {
-    const t = context({ routine: true, routinePerDay: 1 })
+    const t = context({ routine: true, routinePerDay: 1, routineWindows: '11:00-13:00' })
     t.answer(JSON.stringify({ use, goal: 'Read cats' }))
     const plan: RoutinePlan = {
       date: '2026-11-07',
@@ -360,11 +386,11 @@ test('作息每天上限、错过时段不补、拒绝和主动任务来源', as
     await runRoutine(t.ctx, signal, NOW, () => 0, t.start)
     expect(t.calls.quiet).toHaveLength(1)
   }
-  const t = context({ routine: true, routinePerDay: 0 })
+  const t = context({ routine: true, routinePerDay: 0, routineWindows: '11:00-11:59' })
   t.ctx.storage.set('routinePlan', {
     date: '2026-11-07',
     todayCount: 0,
-    windows: [{ at: NOW - 5000, end: NOW - 1, status: 'pending' }],
+    windows: [{ window: '11:00-11:59', at: NOW - 5000, end: NOW - 1, status: 'pending' }],
   })
   await runRoutine(t.ctx, signal, NOW, () => 0, t.start)
   expect(t.calls.quiet).toHaveLength(0)

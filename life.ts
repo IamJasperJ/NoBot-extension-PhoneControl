@@ -58,10 +58,17 @@ export function routineOf(ctx: ExtensionContext, now: number, random = timing.ra
   const s = settingsOf(ctx.settings)
   const saved = ctx.storage.get<RoutinePlan>('routinePlan')
   const today = saved?.date === localTime(now, s.timeZone).date
-  if (today && (saved.key === undefined || saved.key === planKey(s))) return saved
-  // 同一天改了设置：按新时段重排，但今天已用的次数和上次决定保留（不会因为改设置多用几次）
+  if (today && saved.key === planKey(s)) return saved
+  // 同一天改了设置（或计划是旧版本存的、没有 key）：按新时段重排。
+  // 没变的时段沿用原来的时刻和状态，今天已用的次数和上次决定也保留，不会因为改设置多用几次。
+  const fresh = generatePlan(s, now, random)
   const plan = today
-    ? { ...generatePlan(s, now, random), todayCount: saved.todayCount, lastDecision: saved.lastDecision }
+    ? {
+        ...fresh,
+        windows: fresh.windows.map((w) => saved.windows.find((old) => old.window === w.window) ?? w),
+        todayCount: saved.todayCount,
+        lastDecision: saved.lastDecision,
+      }
     : generatePlan(s, now, random, saved)
   ctx.storage.set('routinePlan', plan)
   return plan

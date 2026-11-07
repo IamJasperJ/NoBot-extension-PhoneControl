@@ -59,11 +59,13 @@ export async function reactNotifications(
     return
   }
   if (!conversationIdle(ctx)) return
-  const items = relevant(pending.items, s).filter((n) => !quietNow(s, n.at))
-  ctx.storage.delete('notificationPending')
   const date = localTime(now, s.timeZone).date
   const rate = ctx.storage.get<{ date: string; count: number; last: number }>('notificationRate')
-  if (!items.length || (rate && (now - rate.last < 600_000 || (rate.date === date && rate.count >= 20)))) return
+  // 刚反应过：通知先留着，冷却结束后再一起看（像真人过一会儿才又看手机），不是直接丢掉
+  if (rate && now - rate.last < 600_000 && !(rate.date === date && rate.count >= 20)) return
+  const items = relevant(pending.items, s).filter((n) => !quietNow(s, n.at))
+  ctx.storage.delete('notificationPending')
+  if (!items.length || (rate && rate.date === date && rate.count >= 20)) return
   try {
     const decision = parseJSON(
       await ctx.host.quietPrompt({
