@@ -2,7 +2,7 @@ import { afterEach, expect, test } from 'bun:test'
 import { Hono } from '../../apps/server/node_modules/hono'
 import type { ExtensionContext } from '../../apps/server/src/extensions/types'
 import { Bridge } from './bridge'
-import { generatePlan, type RoutinePlan, runRoutine, startBackground } from './life'
+import { generatePlan, type RoutinePlan, routineOf, runRoutine, startBackground } from './life'
 import { notificationPrompt, quietNow, reactNotifications, relevant } from './notifications'
 import type { Report } from './operator'
 import {
@@ -329,6 +329,18 @@ test('作息跨午夜计划、跳过概率、随机时刻、日期变更继承�
   })
   expect(generatePlan({ ...s, routineSkip: 1 }, morning, () => 0.5).windows[0]?.status).toBe('skipped')
   expect(generatePlan(s, Date.parse('2026-11-08T00:00:00+08:00'), () => 0.5, plan).windows).toHaveLength(2)
+})
+
+test('当天改了作息设置会按新时段重排，已用次数保留', () => {
+  const t = context({ routineWindows: '13:00-14:00', routineSkip: 0 })
+  const first = routineOf(t.ctx, NOW, () => 0.5)
+  expect(first.windows.map((w) => w.window)).toEqual(['13:00-14:00'])
+  t.ctx.storage.set('routinePlan', { ...first, todayCount: 2 })
+  expect(routineOf(t.ctx, NOW + 60_000, () => 0.1)).toMatchObject({ todayCount: 2 })
+  t.ctx.settings = { ...t.ctx.settings, routineWindows: '15:00-16:00' }
+  const changed = routineOf(t.ctx, NOW + 120_000, () => 0.5)
+  expect(changed.windows.map((w) => w.window)).toEqual(['15:00-16:00'])
+  expect(changed.todayCount).toBe(2)
 })
 
 test('作息每天上限、错过时段不补、拒绝和主动任务来源', async () => {

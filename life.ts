@@ -22,6 +22,8 @@ export interface RoutinePlan {
   windows: RoutineWindow[]
   todayCount: number
   lastDecision?: RoutineLastDecision
+  /** 生成计划时的作息设置；主人当天改了设置就按新设置重排 */
+  key?: string
 }
 
 /** 按当地日历分钟转换时间戳，避免把跨午夜时段截断。 */
@@ -49,13 +51,18 @@ export function generatePlan(s: PhoneSettings, now: number, random: () => number
     const at = start + Math.floor(Math.max(0, Math.min(0.999999, random())) * (end - start))
     windows.push({ window, at, end, status: skip ? 'skipped' : at < now ? 'missed' : 'pending' })
   }
-  return { date, windows, todayCount: 0 }
+  return { date, windows, todayCount: 0, key: planKey(s) }
 }
+const planKey = (s: PhoneSettings) => JSON.stringify([s.routineWindows, s.timeZone, s.routineSkip])
 export function routineOf(ctx: ExtensionContext, now: number, random = timing.random) {
   const s = settingsOf(ctx.settings)
   const saved = ctx.storage.get<RoutinePlan>('routinePlan')
-  if (saved?.date === localTime(now, s.timeZone).date) return saved
-  const plan = generatePlan(s, now, random, saved)
+  const today = saved?.date === localTime(now, s.timeZone).date
+  if (today && (saved.key === undefined || saved.key === planKey(s))) return saved
+  // 同一天改了设置：按新时段重排，但今天已用的次数和上次决定保留（不会因为改设置多用几次）
+  const plan = today
+    ? { ...generatePlan(s, now, random), todayCount: saved.todayCount, lastDecision: saved.lastDecision }
+    : generatePlan(s, now, random, saved)
   ctx.storage.set('routinePlan', plan)
   return plan
 }
