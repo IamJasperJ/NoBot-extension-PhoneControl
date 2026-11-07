@@ -7,6 +7,7 @@ import { notificationPrompt, quietNow, reactNotifications, relevant } from './no
 import type { Report } from './operator'
 import {
   localTime,
+  parseJSON,
   profileOf,
   profilePrompt,
   recordUsage,
@@ -33,7 +34,7 @@ const report: Report = {
   endReason: 'done',
   summary: 'Read the feed',
   memories: [],
-  steps: [],
+  steps: [{ index: 1, thought: '', action: 'open_app "Feed"', result: 'OK', at: 0 }],
   durationMs: 100,
 }
 function context(raw: Record<string, unknown> = {}) {
@@ -401,6 +402,17 @@ test('作息每天上限、错过时段不补、拒绝和主动任务来源', as
   await runRoutine(t.ctx, signal, NOW, () => 0, t.start)
   expect(t.calls.quiet).toHaveLength(0)
   expect(t.ctx.storage.get<RoutinePlan>('routinePlan')?.windows[0]?.status).toBe('missed')
+})
+
+test('没做成的自动任务不分享，模型回答前后带话也能解析', async () => {
+  const t = context({ routineShare: 'always' })
+  const empty = { ...report, endReason: 'gave_up' as const, steps: [] }
+  expect(await shouldShare(t.ctx, 'routine', empty, signal)).toBe(false)
+  expect(await shouldShare(t.ctx, 'notification', empty, signal)).toBe(false)
+  expect(await shouldShare(t.ctx, undefined, empty, signal)).toBe(true)
+  expect(parseJSON('好的。{"share":true} 就这样')).toEqual({ share: true })
+  expect(parseJSON('笔记如下：["a","b"]')).toEqual(['a', 'b'])
+  expect(parseJSON('随便聊聊')).toBeNull()
 })
 
 test('作息分享三种模式，只在 worth 使用角色静默判断，停止不分享', async () => {

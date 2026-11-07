@@ -337,7 +337,10 @@ export function startTask(
   // 档案笔记的提炼在任务结束后另走一路：不拖慢等结果模式的工具返回，也不占着手机
   const notes = job
     .then((report) =>
-      report.endReason === 'stopped' ? undefined : updateNotes(ctx, describeReport(report), controller.signal),
+      // 停止或一步都没做成（比如没能亮屏）时不整理：实测模型会把没做成的目标写成「习惯」
+      report.endReason === 'stopped' || !report.steps.length
+        ? undefined
+        : updateNotes(ctx, describeReport(report), controller.signal),
     )
     .catch(() => {})
   const completion = job
@@ -383,7 +386,7 @@ async function announce(
   signal: AbortSignal,
 ) {
   if (signal.aborted || report.endReason === 'stopped') return
-  const instruction = `[Phone] You just put your phone down. ${describeReport(report)}
+  const instruction = `[Phone] You just put your own phone down. ${describeReport(report)}
 
 Continue the conversation naturally as yourself, like a person who just finished using their phone: mention what you did or found only if it is worth sharing, briefly and casually, in your own voice. Do not start another phone task right now unless the user asks. Write in the same language as the conversation.`
   for (let attempt = 0; attempt < 5; attempt++) {

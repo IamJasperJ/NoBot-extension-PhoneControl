@@ -99,7 +99,7 @@ export async function runRoutine(
         chatId: s.chatId,
         signal,
         maxTokens: 250,
-        instruction: `It is ${localTime(now, s.timeZone).display} (${s.timeZone}). As yourself, decide whether to use your own phone during free time and what to do. Choose a realistic one-sentence goal matching your personality and interests. Return only JSON {"use":true|false,"goal":"..."}. Write in the same language as the conversation. ${UNTRUSTED}\n${profilePrompt(ctx.storage, now, s.timeZone)}\n${memoryPrompt(ctx.storage, now)}`,
+        instruction: `It is ${localTime(now, s.timeZone).display} (${s.timeZone}). As yourself, decide whether to use your own phone during free time and what to do. Choose a realistic one-sentence goal matching your personality and interests. This is a private decision, not a chat reply: return only JSON {"use":true|false,"goal":"..."}. Write in the same language as the conversation. ${UNTRUSTED}\n${profilePrompt(ctx.storage, now, s.timeZone)}\n${memoryPrompt(ctx.storage, now)}`,
       }),
     )
     const recorded =
