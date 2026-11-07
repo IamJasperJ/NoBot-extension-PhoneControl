@@ -1,6 +1,6 @@
 import type { Extension, ExtensionContext } from '../../apps/server/src/extensions/types'
 import { available, reactNotifications, UNTRUSTED, windowMinutes } from './notifications'
-import { localTime, parseJSON, profilePrompt, refreshApps, writeDiary } from './profile'
+import { localTime, parseJSON, profileOf, profilePrompt, refreshApps, writeDiary } from './profile'
 import { memoryPrompt, type PhoneSettings, settingsOf, startTask, timing } from './tasks'
 
 export interface RoutineWindow {
@@ -99,7 +99,11 @@ export async function runRoutine(
         chatId: s.chatId,
         signal,
         maxTokens: 250,
-        instruction: `It is ${localTime(now, s.timeZone).display} (${s.timeZone}). As yourself, decide whether to use your own phone during free time and what to do. Choose a realistic one-sentence goal matching your personality and interests. This is a private decision, not a chat reply: return only JSON {"use":true|false,"goal":"..."}. Write in the same language as the conversation. ${UNTRUSTED}\n${profilePrompt(ctx.storage, now, s.timeZone)}\n${memoryPrompt(ctx.storage, now)}`,
+        instruction: `It is ${localTime(now, s.timeZone).display} (${s.timeZone}). As yourself, decide whether to use your own phone during free time and what to do. Choose a realistic one-sentence goal matching your personality and interests, using an app that is installed on your phone. This is a private decision, not a chat reply: return only JSON {"use":true|false,"goal":"..."}. Write in the same language as the conversation. ${UNTRUSTED}\nApps installed on your phone: ${JSON.stringify(
+          profileOf(ctx.storage)
+            .apps.slice(0, 80)
+            .map((a) => a.label),
+        )}\n${profilePrompt(ctx.storage, now, s.timeZone)}\n${memoryPrompt(ctx.storage, now)}`,
       }),
     )
     const recorded =

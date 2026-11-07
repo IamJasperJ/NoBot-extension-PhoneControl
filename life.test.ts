@@ -18,7 +18,7 @@ import {
 } from './profile'
 import { type PhoneNotification, parseNotifications } from './protocol'
 import { type LifeResponse, registerRoutes, registerTaskRoutes } from './routes'
-import { reservePhone, settingsOf, startTask, stopAll, timing } from './tasks'
+import { didSomething, reservePhone, settingsOf, startTask, stopAll, timing } from './tasks'
 
 const NOW = Date.parse('2026-11-07T12:00:00+08:00')
 const signal = new AbortController().signal
@@ -410,6 +410,11 @@ test('没做成的自动任务不分享，模型回答前后带话也能解析',
   expect(await shouldShare(t.ctx, 'routine', empty, signal)).toBe(false)
   expect(await shouldShare(t.ctx, 'notification', empty, signal)).toBe(false)
   expect(await shouldShare(t.ctx, undefined, empty, signal)).toBe(true)
+  // 只有一步「放弃」也算没做成
+  const quit = { ...empty, steps: [{ index: 1, thought: '', action: 'give_up: 没装这个应用', result: 'OK', at: 0 }] }
+  expect(didSomething(quit)).toBe(false)
+  expect(await shouldShare(t.ctx, 'routine', quit, signal)).toBe(false)
+  expect(didSomething(report)).toBe(true)
   expect(parseJSON('好的。{"share":true} 就这样')).toEqual({ share: true })
   expect(parseJSON('笔记如下：["a","b"]')).toEqual(['a', 'b'])
   expect(parseJSON('随便聊聊')).toBeNull()

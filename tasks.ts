@@ -338,7 +338,7 @@ export function startTask(
   const notes = job
     .then((report) =>
       // 停止或一步都没做成（比如没能亮屏）时不整理：实测模型会把没做成的目标写成「习惯」
-      report.endReason === 'stopped' || !report.steps.length
+      report.endReason === 'stopped' || !didSomething(report)
         ? undefined
         : updateNotes(ctx, describeReport(report), controller.signal),
     )
@@ -363,6 +363,11 @@ const END_TEXT: Record<EndReason, string> = {
   steps: 'reached the step limit',
   stopped: 'was stopped by the user',
   error: 'failed',
+}
+
+/** 任务里是否真的做成过操作（不算最后的 done / give_up）：一步没做成时不整理档案、自动任务也不分享 */
+export function didSomething(report: Report) {
+  return report.steps.some((step) => step.result === 'OK' && !/^(done|give_up)\b/.test(step.action))
 }
 
 /** 给角色模型看的任务结果（英文；内容本身按目标的语言） */
