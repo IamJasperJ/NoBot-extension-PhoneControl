@@ -157,6 +157,9 @@ export interface Memory {
 /** 等待时长倍率：测试里设成 0，跳过拟人停顿 */
 export const timing = { scale: 1, now: Date.now, random: Math.random }
 
+/** 桌面、系统界面这类不算「用过的应用」，否则最常用里总是桌面 */
+export const countsAsApp = (pkg: string) => !!pkg && !/launcher|systemui|^android$/i.test(pkg)
+
 const STEPS_KEPT = 40
 const MEMORIES_KEPT = 8
 
@@ -268,7 +271,7 @@ export function startTask(
         const result = await runCommand(bridge, command, controller.signal, state.id)
         if (result.ok) {
           const pkg = command.action === 'open' ? command.packageName : result.data?.packageName
-          if (typeof pkg === 'string' && pkg && !used.has(pkg)) {
+          if (typeof pkg === 'string' && countsAsApp(pkg) && !used.has(pkg)) {
             used.add(pkg)
             recordUsage(storage, pkg, timing.now())
           }
