@@ -2,8 +2,10 @@ import { describe, expect, test } from 'bun:test'
 import { Hono } from '../../apps/server/node_modules/hono'
 import type { ExtensionStorage } from '../../apps/server/src/extensions/types'
 import { Bridge, parseResumed } from './bridge'
+import { runCommand } from './commands'
 import { parseCommand, parseResult } from './protocol'
 import { isPrivateIpv4, localAddresses, registerRoutes } from './routes'
+import { timing } from './tasks'
 
 function memory(): ExtensionStorage {
   const values = new Map<string, unknown>()
@@ -61,7 +63,7 @@ describe('设备指令状态机', () => {
     bridge.poll(pair.deviceId, false)
     expect(() => bridge.enqueue({ action: 'home' })).toThrow('DEVICE_OFFLINE')
     bridge.poll(pair.deviceId, true)
-    advance(16000)
+    advance(50000)
     expect(() => bridge.enqueue({ action: 'home' })).toThrow('DEVICE_OFFLINE')
   })
   test('串行交付，重复轮询及服务端重建不重发', () => {
@@ -409,4 +411,66 @@ test('type 密码标记只接受缺省或 true', () => {
   })
   for (const password of [false, null, 0, 1, '', 'true', [], {}])
     expect(() => parseCommand({ action: 'type', text: 'secret', password })).toThrow('INVALID_INPUT')
+})
+
+test('在线窗口容忍四十秒间隔；成功回报刷新在线时间且不记录断线', () => {
+  const { bridge, pair, advance } = setup()
+  advance(40_000)
+  expect(bridge.status().online).toBe(true)
+  advance(10_000)
+  expect(bridge.status().online).toBe(false)
+  bridge.poll(pair.deviceId, true)
+  const disconnects = bridge.disconnects()
+  const id = bridge.enqueue({ action: 'home' })
+  bridge.poll(pair.deviceId, true)
+  advance(20_000)
+  expect(bridge.finish(pair.deviceId, id, { ok: true, code: 'OK' })).toBe(true)
+  expect(bridge.status().lastSeen).toBe(71_000)
+  expect(bridge.disconnects()).toEqual(disconnects)
+  advance(40_000)
+  expect(bridge.status().online).toBe(true)
+})
+
+test('入队暂时离线或忙碌会每秒重试；三十秒仍失败保留错误码，取消及时退出', async () => {
+  const originalScale = timing.scale
+  timing.scale = 0
+  try {
+    for (const code of ['DEVICE_OFFLINE', 'DEVICE_BUSY']) {
+      const { bridge, pair, advance } = setup()
+      if (code === 'DEVICE_OFFLINE') advance(50_000)
+      else bridge.enqueue({ action: 'home' })
+      const enqueue = bridge.enqueue.bind(bridge)
+      let attempts = 0
+      bridge.enqueue = (command, taskId) => {
+        attempts++
+        advance(1000)
+        if (attempts === 4) {
+          bridge.cancel()
+          bridge.poll(pair.deviceId, true)
+        }
+        const id = enqueue(command, taskId)
+        bridge.poll(pair.deviceId, true)
+        bridge.finish(pair.deviceId, id, { ok: true, code: 'OK' })
+        return id
+      }
+      expect(await runCommand(bridge, { action: 'home' }, new AbortController().signal)).toMatchObject({ ok: true })
+      expect(attempts).toBe(4)
+    }
+    for (const code of ['DEVICE_OFFLINE', 'DEVICE_BUSY']) {
+      const { bridge } = setup()
+      let attempts = 0
+      bridge.enqueue = () => {
+        attempts++
+        throw Error(code)
+      }
+      await expect(runCommand(bridge, { action: 'home' }, new AbortController().signal)).rejects.toThrow(code)
+      expect(attempts).toBe(31)
+      const controller = new AbortController()
+      const pending = runCommand(bridge, { action: 'home' }, controller.signal)
+      controller.abort()
+      await expect(pending).rejects.toThrow('CANCELLED')
+    }
+  } finally {
+    timing.scale = originalScale
+  }
 })

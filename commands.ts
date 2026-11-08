@@ -1,5 +1,6 @@
 import type { Bridge } from './bridge'
 import type { Command, Result } from './protocol'
+import { timing } from './tasks'
 
 /**
  * 发一条指令并等手机回报。抛出的错误码：DEVICE_OFFLINE / DEVICE_BUSY（排不上队）、
@@ -11,8 +12,21 @@ export async function runCommand(
   signal: AbortSignal,
   taskId?: string,
 ): Promise<Result> {
-  signal.throwIfAborted()
-  const id = bridge.enqueue(command, taskId)
+  let id: string
+  let firstError: Error | undefined
+  // 只重试入队，已派发的操作不能因等待超时而重复执行。
+  for (let waited = 0; ; waited++) {
+    if (signal.aborted) throw new Error('CANCELLED')
+    try {
+      id = bridge.enqueue(command, taskId)
+      break
+    } catch (error) {
+      if (!(error instanceof Error) || !['DEVICE_OFFLINE', 'DEVICE_BUSY'].includes(error.message)) throw error
+      firstError ??= error
+      if (waited >= 30) throw firstError
+      await delay(1000 * timing.scale, signal)
+    }
+  }
   try {
     while (true) {
       if (signal.aborted) throw new Error('CANCELLED')

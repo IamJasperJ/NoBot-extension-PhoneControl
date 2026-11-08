@@ -3,6 +3,9 @@ import type { ExtensionStorage } from '../../apps/server/src/extensions/types'
 import type { Command, PhoneNotification, Result } from './protocol'
 import { object } from './protocol'
 
+// 请求或截图回报偶尔需要 20–40 秒，放宽在线窗口以免短暂延迟被误判为离线。
+export const ONLINE_WINDOW_MS = 45_000
+
 export type DisconnectCause = 'frozen' | 'network' | 'restarted' | 'paused' | 'unknown'
 
 /** 一次断线：服务端从上次轮询到这次轮询的间隔，加上 App 报告的原因 */
@@ -88,7 +91,7 @@ export class Bridge {
     return {
       paired: !!device,
       deviceId: device?.id,
-      online: !!device && device.lastSeen > 0 && this.now() - device.lastSeen < 15_000,
+      online: !!device && device.lastSeen > 0 && this.now() - device.lastSeen < ONLINE_WINDOW_MS,
       ready: device?.ready ?? false,
       lastSeen: device?.lastSeen ?? null,
       disconnects: this.disconnects().slice(-10).reverse(),
@@ -162,8 +165,10 @@ export class Bridge {
   finish(deviceId: string, id: string, result: Result) {
     const job = this.storage.get<Job>('job')
     if (!job || job.deviceId !== deviceId || job.id !== id || job.expiresAt <= this.now()) return false
+    if (job.state !== 'done' && job.state !== 'delivered') return false
+    const device = this.storage.get<Device>('device')
+    if (device?.id === deviceId) this.storage.set('device', { ...device, lastSeen: this.now() })
     if (job.state === 'done') return true
-    if (job.state !== 'delivered') return false
     this.storage.set('job', { ...job, state: 'done', result })
     return true
   }
