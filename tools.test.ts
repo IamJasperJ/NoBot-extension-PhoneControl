@@ -2,7 +2,18 @@ import { beforeAll, describe, expect, test } from 'bun:test'
 import type { ExtensionContext } from '../../apps/server/src/extensions/types'
 import { Bridge } from './bridge'
 import { profileOf } from './profile'
-import { currentTask, memoryPrompt, policyOf, recentMemories, settingsOf, stopAll, timing } from './tasks'
+import {
+  currentTask,
+  MAX_ROUNDS,
+  memoryPrompt,
+  policyOf,
+  recentMemories,
+  settingsOf,
+  startTask,
+  stopAll,
+  stopTask,
+  timing,
+} from './tasks'
 import { phoneTools } from './tools'
 
 function context(
@@ -42,7 +53,7 @@ const toolCtx = (ctx: ExtensionContext, signal = new AbortController().signal) =
 const tool = (ctx: ExtensionContext, name: string) => phoneTools(ctx).find((t) => t.name === name)
 
 /** 模拟手机：不停轮询，按指令回报；observe 回一个有两个按钮的界面 */
-function fakePhone(bridge: Bridge, deviceId: string, log: string[], taskIds: string[] = []) {
+function fakePhone(bridge: Bridge, deviceId: string, log: string[], taskIds: string[] = [], changing = false) {
   let stopped = false
   void (async () => {
     while (!stopped) {
@@ -59,7 +70,11 @@ function fakePhone(bridge: Bridge, deviceId: string, log: string[], taskIds: str
                 nodes: [
                   { text: '推荐', clickable: true, bounds: [0, 100, 200, 200] },
                   { text: '搜索', clickable: true, editable: true, bounds: [300, 100, 900, 200] },
-                  { text: '猫猫视频', clickable: false, bounds: [0, 400, 1000, 600] },
+                  {
+                    text: changing ? `猫猫视频 ${log.length}` : '猫猫视频',
+                    clickable: false,
+                    bounds: [0, 400, 1000, 600],
+                  },
                 ],
               }
             : undefined
@@ -164,6 +179,9 @@ describe('模型工具', () => {
     try {
       const result = await tool(ctx, 'phone_task')?.run({ goal: '刷会儿 B 站', wait: true }, toolCtx(ctx))
       expect(result?.content).toContain('Phone task finished')
+      expect(result?.content).toEndWith(
+        'If the overall request is not finished yet, call phone_task again with the next part.',
+      )
       expect(result?.content).toContain('猫猫视频')
       expect(result?.images?.length).toBe(1)
       expect(actions).toEqual(['observe', 'tap', 'observe', 'swipe', 'observe'])
@@ -213,7 +231,7 @@ describe('模型工具', () => {
     const bridge = new Bridge(ctx.storage)
     const pair = bridge.pair()
     bridge.poll(pair.deviceId, true)
-    const stop = fakePhone(bridge, pair.deviceId, [])
+    const stop = fakePhone(bridge, pair.deviceId, [], [], true)
     try {
       const first = await tool(ctx, 'phone_task')?.run({ goal: '刷小红书', wait: false }, toolCtx(ctx))
       expect(first?.content).toContain('Started using the phone in the background')
@@ -295,3 +313,137 @@ test('phone_control 按调用时的密码权限过滤标记，只有明确 true 
     }
   }
 })
+
+test('后台任务接着完成第二段，整串完成前宿主等待且只分享一次', async () => {
+  const triggers: string[] = []
+  const quiet: string[] = []
+  const systems: string[] = []
+  let decisions = 0
+  let step = 0
+  const ctx = context(
+    {},
+    {
+      getChatInfo: (() => ({
+        characters: [{ id: 'c1', name: '小雪' }],
+      })) as unknown as ExtensionContext['host']['getChatInfo'],
+      complete: async (opts) => {
+        if (!opts.messages[0]?.content?.includes('Rules:')) return '[]'
+        systems.push(opts.messages.at(-1)?.content ?? '')
+        return ++step % 2 === 1
+          ? '{"action":{"type":"tap","element":1}}'
+          : JSON.stringify({ action: { type: 'done', summary: step === 2 ? '起点已签到' : 'B 站已签到' } })
+      },
+      quietPrompt: async (opts) => {
+        expect(opts).toMatchObject({ chatId: 'allowed', includeHistory: false, maxTokens: 250 })
+        quiet.push(opts.instruction)
+        expect(triggers).toHaveLength(0)
+        return ++decisions === 1 ? '{"continue":true,"goal":"B 站签到"}' : '{"continue":false}'
+      },
+      waitIdle: async () => {},
+      trigger: (_chatId, opts) => {
+        triggers.push(opts?.instruction ?? '')
+      },
+    },
+  )
+  const bridge = new Bridge(ctx.storage)
+  const pair = bridge.pair()
+  bridge.poll(pair.deviceId, true)
+  const stop = fakePhone(bridge, pair.deviceId, [], [], true)
+  try {
+    await startTask(ctx, {
+      chatId: 'allowed',
+      speakerId: 'c1',
+      goal: '起点、B 站签到',
+      minutes: 1,
+      mode: 'background',
+      tracked: true,
+    })
+    expect(currentTask(ctx.storage)?.goal).toBe('B 站签到')
+    expect(systems.at(-1)).toContain('B 站签到')
+    expect(quiet).toHaveLength(2)
+    expect(quiet[1]).toContain('起点已签到')
+    expect(triggers).toHaveLength(1)
+    expect(triggers[0]).toContain('Overall goal: 起点、B 站签到')
+    expect(triggers[0]).toContain('Round 1:')
+    expect(triggers[0]).toContain('Round 2:')
+    expect(triggers[0]).toContain('起点已签到')
+    expect(triggers[0]).toContain('B 站已签到')
+    expect(triggers[0]).not.toContain('Do not start another phone task')
+    expect(recentMemories(ctx.storage)).toHaveLength(2)
+  } finally {
+    stop()
+  }
+})
+
+for (const scenario of ['stopped', 'gave_up', 'error', 'empty', 'limit', 'offline', 'notReady', 'aborted']) {
+  test(`不询问接续：${scenario}`, async () => {
+    let steps = 0
+    let decisions = 0
+    const controller = new AbortController()
+    const ctx = context(
+      {},
+      {
+        getChatInfo: (() => ({ characters: [] })) as unknown as ExtensionContext['host']['getChatInfo'],
+        complete: async (opts) => {
+          if (!opts.messages[0]?.content?.includes('Rules:')) return '[]'
+          steps++
+          if (scenario === 'empty') return '{"action":{"type":"done","summary":"Nothing"}}'
+          if (steps === 1) return '{"action":{"type":"tap","element":1}}'
+          if (scenario === 'stopped') {
+            stopTask(ctx.storage)
+            throw Error('CANCELLED')
+          }
+          if (scenario === 'aborted') {
+            controller.abort()
+            throw Error('CANCELLED')
+          }
+          if (scenario === 'error') throw Error('model failed')
+          if (scenario === 'offline') bridge.revoke()
+          if (scenario === 'notReady') bridge.poll(pair.deviceId, false)
+          return scenario === 'gave_up'
+            ? '{"action":{"type":"give_up","reason":"Unavailable"}}'
+            : '{"action":{"type":"done","summary":"Finished this part"}}'
+        },
+        quietPrompt: async () => {
+          decisions++
+          return '{"continue":true,"goal":"Next"}'
+        },
+        waitIdle: async () => {},
+        trigger: () => {},
+      },
+    )
+    const bridge = new Bridge(ctx.storage)
+    const pair = bridge.pair()
+    bridge.poll(pair.deviceId, true)
+    const stop = fakePhone(bridge, pair.deviceId, [], [], true)
+    try {
+      const report = await startTask(ctx, {
+        chatId: 'allowed',
+        goal: 'Read',
+        minutes: 1,
+        mode: 'background',
+        tracked: true,
+        signal: controller.signal,
+        chain:
+          scenario === 'limit'
+            ? {
+                goal: 'Overall',
+                rounds: Array.from({ length: MAX_ROUNDS - 1 }, () => ({
+                  goal: 'Previous',
+                  endReason: 'done',
+                  summary: 'Done',
+                  memories: [],
+                  steps: [],
+                  durationMs: 0,
+                })),
+              }
+            : undefined,
+      })
+      expect(decisions).toBe(0)
+      if (['stopped', 'gave_up', 'error'].includes(scenario)) expect(String(report.endReason)).toBe(scenario)
+      if (scenario === 'empty') expect(currentTask(ctx.storage)?.goal).toBe('Read')
+    } finally {
+      stop()
+    }
+  })
+}

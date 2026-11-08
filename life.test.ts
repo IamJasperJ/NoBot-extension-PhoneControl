@@ -18,7 +18,18 @@ import {
 } from './profile'
 import { type PhoneNotification, parseNotifications } from './protocol'
 import { type LifeResponse, registerRoutes, registerTaskRoutes } from './routes'
-import { countsAsApp, didSomething, reservePhone, settingsOf, startTask, stopAll, timing } from './tasks'
+import {
+  countsAsApp,
+  decideNext,
+  describeChain,
+  describeReport,
+  didSomething,
+  reservePhone,
+  settingsOf,
+  startTask,
+  stopAll,
+  timing,
+} from './tasks'
 
 const NOW = Date.parse('2026-11-07T12:00:00+08:00')
 const signal = new AbortController().signal
@@ -564,4 +575,34 @@ test('作息设备离线、会话生成、关闭开关时不决策；新一天�
   t.ctx.storage.set('routinePlan', { date: '2026-11-06', todayCount: 4, windows: [] })
   await runRoutine(t.ctx, signal, NOW, () => 0, t.start)
   expect(t.ctx.storage.get<RoutinePlan>('routinePlan')?.todayCount).toBe(0)
+})
+
+test('接续决定仅接受严格 true 和非空且不超过五百字的目标，异常视为结束', async () => {
+  const t = context()
+  for (const answer of [
+    'invalid JSON',
+    '{}',
+    '{"continue":false,"goal":"Next"}',
+    '{"continue":"true","goal":"Next"}',
+    '{"continue":true,"goal":"  "}',
+    '{"continue":true,"goal":3}',
+    JSON.stringify({ continue: true, goal: 'a'.repeat(501) }),
+  ]) {
+    t.answer(answer)
+    expect(await decideNext(t.ctx, 'chat', 'Overall', [report], signal)).toBeNull()
+  }
+  t.answer('{"continue":true,"goal":" Next "}')
+  expect(await decideNext(t.ctx, 'chat', 'Overall', [report], signal)).toBe('Next')
+  t.fail()
+  expect(await decideNext(t.ctx, 'chat', 'Overall', [report], signal)).toBeNull()
+  expect(describeChain('Overall', [report])).toBe(describeReport(report))
+})
+
+test('整串自动任务只要任一轮做成操作就能分享，判断提示包含整串', async () => {
+  const t = context()
+  const empty = { ...report, goal: 'Second', steps: [] }
+  const description = describeChain('Overall', [report, empty])
+  t.answer('{"share":true}')
+  expect(await shouldShare(t.ctx, 'routine', empty, signal, description, true)).toBe(true)
+  expect(t.calls.quiet[0]).toContain(description)
 })

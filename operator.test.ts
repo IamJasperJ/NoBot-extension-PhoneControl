@@ -444,6 +444,8 @@ describe('操作限制', () => {
     expect(prompt).toContain('forbids these and the phone will refuse them: send messages')
     expect(prompt).toContain('Never open these apps: 支付宝')
     expect(prompt).toContain('Never enter passwords')
+    expect(prompt).toContain('complete every part before using done')
+    expect(prompt).toContain('which parts are completed and which remain')
   })
   test('主循环：点禁止的按钮、聊天框回车、打开禁止的应用都不执行，并把原因告诉模型', async () => {
     const nodes = [

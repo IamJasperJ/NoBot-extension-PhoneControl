@@ -18,7 +18,7 @@ export function phoneTools(ctx: ExtensionContext): ToolDefinition[] {
     name: 'phone_task',
     // 同步模式含思考最多 WAIT_MINUTES 的两倍分钟，再留一分钟观察和收尾
     timeoutMs: (WAIT_MINUTES * 2 + 1) * 60_000,
-    description: `Use your own Android phone. Describe a goal in natural language (for example "browse Bilibili for a while and find something fun", "check whether there are new WeChat messages", "search Xiaohongshu for a hotpot place nearby"). An operator carries out the whole task step by step as you, until it is done, then reports what happened and what you noticed.
+    description: `Use your own Android phone. Describe a goal in natural language (for example "browse Bilibili for a while and find something fun", "check whether there are new WeChat messages", "search Xiaohongshu for a hotpot place nearby"). For a large task, you can describe just the overall goal; after completing a part, you will decide whether to keep going. An operator carries out the whole task step by step as you, until it is done, then reports what happened and what you noticed.
 - wait=true: the user is waiting for the answer right now (a quick look-up). The result comes back in this call; at most ${WAIT_MINUTES} minutes.
 - wait=false: you use the phone on your own. It runs in the background and you will be told what happened afterwards, so just say casually that you are picking up your phone and keep chatting.
 Do not narrate or plan the individual taps yourself. Only one phone task runs at a time. Write the goal in the same language as the conversation.`,
@@ -60,7 +60,7 @@ Do not narrate or plan the individual taps yourself. Only one phone task runs at
         }
         const report = await job
         return {
-          content: describeReport(report),
+          content: `${describeReport(report)}\nIf the overall request is not finished yet, call phone_task again with the next part.`,
           images: report.lastImage ? [{ bytes: report.lastImage, mime: 'image/jpeg' }] : undefined,
         }
       } catch (error) {

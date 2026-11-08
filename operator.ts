@@ -438,6 +438,7 @@ Actions:
 - {"type":"give_up","reason":"..."} — only when truly blocked (app missing, or after trying 2–3 times to pass verification/captcha/login wall without success)
 
 Rules:
+- If the goal has multiple parts (for example, checking in across several apps), complete every part before using done. In the done summary, state clearly which parts are completed and which remain.
 - Keep going until the goal is achieved. Never stop halfway or just describe what you would do. For open-ended goals such as "browse for a while", keep browsing until little time is left, then finish with done.
 - Behave like a person: linger on what ${goal.name} finds interesting (wait to watch or read it), skip boring things quickly, vary the pace, sometimes open details or comments, and do not repeat the identical action over and over.
 - If encountering a captcha, puzzle or verification (slider, puzzle piece, click challenge) or a login wall, directly attempt to solve or pass it 2–3 times using tap or drag (or look for skip/guest/quick-login options). Only give up if still blocked after 2–3 attempts.
