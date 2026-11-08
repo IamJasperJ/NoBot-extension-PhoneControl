@@ -16,8 +16,8 @@ export function phoneTools(ctx: ExtensionContext): ToolDefinition[] {
 
   const task: ToolDefinition = {
     name: 'phone_task',
-    // 同步模式最多 WAIT_MINUTES 分钟，留出观察和收尾的余量
-    timeoutMs: (WAIT_MINUTES + 2) * 60_000,
+    // 同步模式含思考最多 WAIT_MINUTES 的两倍分钟，再留一分钟观察和收尾
+    timeoutMs: (WAIT_MINUTES * 2 + 1) * 60_000,
     description: `Use your own Android phone. Describe a goal in natural language (for example "browse Bilibili for a while and find something fun", "check whether there are new WeChat messages", "search Xiaohongshu for a hotpot place nearby"). An operator carries out the whole task step by step as you, until it is done, then reports what happened and what you noticed.
 - wait=true: the user is waiting for the answer right now (a quick look-up). The result comes back in this call; at most ${WAIT_MINUTES} minutes.
 - wait=false: you use the phone on your own. It runs in the background and you will be told what happened afterwards, so just say casually that you are picking up your phone and keep chatting.

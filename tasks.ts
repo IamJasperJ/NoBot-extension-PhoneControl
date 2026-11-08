@@ -52,7 +52,7 @@ export const DEFAULT_SETTINGS: PhoneSettings = {
   operatorConnectionId: '',
   operatorModel: '',
   maxSteps: 60,
-  maxMinutes: 8,
+  maxMinutes: 15,
   directTool: false,
   allowLike: false,
   allowPost: false,

@@ -494,6 +494,7 @@ test('注册宿主日计划和 skip 周期任务，调度设置变更同步日�
   startBackground(
     {
       ...t.ctx,
+      channels: {} as never,
       tasks: {
         register: (definition, run) => {
           jobs.set(definition.id, { definition, run })

@@ -159,7 +159,7 @@ export default {
       key: 'maxMinutes',
       type: 'number',
       label: t('单次最长分钟'),
-      hint: t('一次用手机最多多久，到时间就放下'),
+      hint: t('一次用手机最多多久（不算操作员模型思考的时间），到时间就放下；思考很慢时总时长最多是它的两倍'),
       min: 1,
       max: 30,
       step: 1,

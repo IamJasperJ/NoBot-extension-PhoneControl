@@ -109,7 +109,7 @@ Extension settings:
 | Setting | Description |
 | --- | --- |
 | Operator connection / model | The model that runs tasks; empty follows the chat. Must support images; faster models feel more human |
-| Max minutes / max steps per task | Limits for one task; when reached, the model writes a short recap |
+| Max minutes / max steps per task | Limits for one task; when reached, the model writes a short recap. Minutes default to 15 and exclude operator model thinking time; total time is capped at twice that |
 | Limits | See Safety limits above |
 | Allow direct step-by-step control | Also exposes the low-level `phone_control` tool so the chat model can observe and tap step by step itself |
 

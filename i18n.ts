@@ -51,7 +51,8 @@ const en: Record<string, string> = {
   洛杉矶: 'Los Angeles',
   '角色决定要做什么，操作员模型替它看屏幕、一步步点。':
     'The character decides what to do; the operator model looks at the screen and taps step by step for it.',
-  '一次用手机最多多久，到时间就放下': 'How long one phone session may last before the phone is put down',
+  '一次用手机最多多久（不算操作员模型思考的时间），到时间就放下；思考很慢时总时长最多是它的两倍':
+    'How long phone use may last, excluding operator model thinking time, before the phone is put down; if thinking is slow, total elapsed time is capped at twice this limit',
   '每点一下、滑一下算一步，防止卡在某个界面反复操作':
     'Each tap or swipe is a step; this stops it from getting stuck repeating actions on one screen',
   '对角色的所有手机操作都生效，包括它看到通知后去回复、按作息主动使用。没放开的操作会在执行前被拦下。':

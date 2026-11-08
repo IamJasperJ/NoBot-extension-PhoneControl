@@ -641,8 +641,17 @@ const SCREEN_FAILURES: Record<string, string> = {
 }
 const BLOCKING = new Set(Object.keys(SCREEN_FAILURES))
 
+// 模型思考不占手机预算，但总时长仍限为两倍，避免慢模型让任务拖得太久。
+const TOTAL_TIME_FACTOR = 2
+
 export async function runOperator(goal: Goal, ports: OperatorPorts, signal: AbortSignal): Promise<Report> {
   const started = ports.now()
+  let thinkingMs = 0
+  const budgetLeft = () => {
+    const elapsed = ports.now() - started
+    const phoneMs = elapsed - thinkingMs
+    return Math.min(goal.maxMs - phoneMs, goal.maxMs * TOTAL_TIME_FACTOR - elapsed)
+  }
   const steps: Step[] = []
   const memories: string[] = []
   let failures = 0
@@ -675,8 +684,7 @@ export async function runOperator(goal: Goal, ports: OperatorPorts, signal: Abor
         endReason = 'stopped'
         break
       }
-      const elapsed = ports.now() - started
-      if (elapsed >= goal.maxMs) {
+      if (budgetLeft() <= 0) {
         endReason = 'time'
         break
       }
@@ -725,37 +733,56 @@ export async function runOperator(goal: Goal, ports: OperatorPorts, signal: Abor
       const image = raw && screen.width ? await ports.mark(raw, screen) : raw
 
       // 想
+      const remainingMs = budgetLeft()
+      if (remainingMs <= 0) {
+        endReason = 'time'
+        break
+      }
       const left = {
         steps: goal.maxSteps - index,
-        minutes: Math.max(0, Math.round((goal.maxMs - elapsed) / 60000)),
+        minutes: Math.max(0, Math.round(remainingMs / 60000)),
       }
       let decision: Decision
       try {
-        const reply = await ports.think(
-          [
-            { role: 'system', content: systemPrompt(goal) },
-            {
-              role: 'user',
-              content: stepPrompt(
-                goal,
-                screen,
-                steps,
-                left,
-                [
-                  note,
-                  inBlockedApp ? "This app is blocked by the owner's settings: only back or home are allowed." : '',
-                ]
-                  .filter(Boolean)
-                  .join('\n'),
-              ),
-            },
-          ],
-          image,
-        )
+        let reply: string
+        const thinkingStarted = ports.now()
+        try {
+          reply = await ports.think(
+            [
+              { role: 'system', content: systemPrompt(goal) },
+              {
+                role: 'user',
+                content: stepPrompt(
+                  goal,
+                  screen,
+                  steps,
+                  left,
+                  [
+                    note,
+                    inBlockedApp ? "This app is blocked by the owner's settings: only back or home are allowed." : '',
+                  ]
+                    .filter(Boolean)
+                    .join('\n'),
+                ),
+              },
+            ],
+            image,
+          )
+        } finally {
+          thinkingMs += ports.now() - thinkingStarted
+        }
+        if (budgetLeft() <= 0) {
+          endReason = 'time'
+          break
+        }
         decision = parseDecision(reply)
         note = ''
       } catch (error) {
         if (signal.aborted) throw error
+        if (budgetLeft() <= 0) {
+          endReason = 'time'
+          break
+        }
         if (++failures >= MAX_FAILURES) {
           endReason = 'error'
           summary = 'The operator model kept failing.'

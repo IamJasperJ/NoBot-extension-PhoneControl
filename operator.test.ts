@@ -212,6 +212,98 @@ describe('操作员主循环', () => {
     expect(report.summary).toBe('刚才看了两个视频。')
   })
 
+  test('慢思考不占手机预算，手机时间用完后才停止，回顾仍计入总耗时', async () => {
+    const f = ports(['{"action":{"type":"wait","seconds":30}}', '{"action":{"type":"wait","seconds":30}}', '回顾'])
+    const think = f.p.think
+    f.p.think = async (...args) => {
+      f.advance(20_000)
+      return think(...args)
+    }
+    const report = await runOperator(goal({ maxMs: 60_000 }), f.p, new AbortController().signal)
+    expect(report.endReason).toBe('time')
+    expect(report.steps.map((s) => s.action)).toEqual(['wait 30s', 'wait 30s'])
+    expect(report.summary).toBe('回顾')
+    expect(report.durationMs).toBe(120_000)
+  })
+
+  test('思考返回时总耗时到两倍上限，即使手机时间未用完也不再执行动作', async () => {
+    const f = ports(['{"action":{"type":"wait","seconds":30}}'])
+    const think = f.p.think
+    f.p.think = async (...args) => {
+      f.advance(120_000)
+      return think(...args)
+    }
+    const report = await runOperator(goal({ maxMs: 60_000 }), f.p, new AbortController().signal)
+    expect(report.endReason).toBe('time')
+    expect(report.steps).toHaveLength(0)
+    expect(report.durationMs).toBe(120_000)
+    expect(f.commands.map((c) => c.action)).toEqual(['observe'])
+  })
+
+  test('think 抛错时总耗时到两倍上限，也按时间结束', async () => {
+    const f = ports([])
+    f.p.think = async () => {
+      f.advance(120_000)
+      throw new Error('model unavailable')
+    }
+    const report = await runOperator(goal({ maxMs: 60_000, maxSteps: 1 }), f.p, new AbortController().signal)
+    expect(report.endReason).toBe('time')
+    expect(report.durationMs).toBe(120_000)
+    expect(report.steps).toHaveLength(0)
+  })
+
+  test('Budget left 扣除手机时间，观察屏幕的耗时也计入', async () => {
+    const f = ports(['{"action":{"type":"wait","seconds":30}}', '{"action":{"type":"done","summary":"ok"}}'])
+    const think = f.p.think
+    f.p.think = async (...args) => {
+      f.advance(60_000)
+      return think(...args)
+    }
+    const act = f.p.act
+    f.p.act = async (command) => {
+      f.advance(10_000)
+      return act(command)
+    }
+    const report = await runOperator(goal({ maxMs: 180_000 }), f.p, new AbortController().signal)
+    expect(report.endReason).toBe('done')
+    expect(f.prompts[0]).toContain('Budget left: about 3 min')
+    expect(f.prompts[1]).toContain('Budget left: about 2 min')
+    expect(report.durationMs).toBe(170_000)
+  })
+
+  test('Budget left 受剩余总时长限制，循环开头到两倍上限时停止', async () => {
+    const f = ports(['{"action":{"type":"wait","seconds":30}}', '{"action":{"type":"wait","seconds":30}}', '回顾'])
+    const think = f.p.think
+    f.p.think = async (...args) => {
+      if (f.prompts.length === 0) f.advance(300_000)
+      return think(...args)
+    }
+    const report = await runOperator(goal({ maxMs: 180_000 }), f.p, new AbortController().signal)
+    expect(f.prompts[1]).toContain('Budget left: about 1 min')
+    expect(report.endReason).toBe('time')
+    expect(report.steps).toHaveLength(2)
+    expect(report.durationMs).toBe(360_000)
+  })
+
+  test('think 抛错耗时也从手机时间扣除，可以继续决策', async () => {
+    const f = ports(['{"action":{"type":"done","summary":"ok"}}'])
+    const think = f.p.think
+    let first = true
+    f.p.think = async (...args) => {
+      if (first) {
+        first = false
+        f.advance(150_000)
+        throw new Error('model unavailable')
+      }
+      return think(...args)
+    }
+    const report = await runOperator(goal({ maxMs: 120_000 }), f.p, new AbortController().signal)
+    expect(report.endReason).toBe('done')
+    expect(f.prompts[0]).toContain('Budget left: about 2 min')
+    expect(f.prompts[0]).toContain('model unavailable')
+    expect(report.durationMs).toBe(150_000)
+  })
+
   test('步数用完同样补回顾；模型预算提示里写着剩余步数', async () => {
     const f = ports(['{"action":{"type":"back"}}', '{"action":{"type":"back"}}', '回顾'])
     const report = await runOperator(goal({ maxSteps: 2 }), f.p, new AbortController().signal)
