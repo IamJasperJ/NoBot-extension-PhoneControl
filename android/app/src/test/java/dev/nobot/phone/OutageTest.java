@@ -40,6 +40,29 @@ public class OutageTest {
     assertEquals(200000, report.offlineMs);
   }
 
+  @Test public void networkOutageCountsFromLastSuccess() {
+    Outage outage = new Outage();
+    outage.ok(1000);
+    outage.tick(1000);
+    outage.failed(19000, "SocketTimeoutException");
+    // 轮询前先取报告：不够上报门槛时清空，但下一次失败仍从上次成功算起
+    assertNull(outage.succeeded(20000));
+    outage.failed(38000, "SocketTimeoutException");
+    Outage.Report report = outage.succeeded(40000);
+    assertEquals("network", report.cause);
+    assertEquals(39000, report.offlineMs);
+  }
+
+  @Test public void oversleptPollMeansFrozen() {
+    Outage outage = new Outage();
+    outage.slept(1000, 3000, 1500);
+    assertNull(outage.succeeded(40000));
+    outage.slept(50000, 85000, 4000);
+    Outage.Report report = outage.succeeded(85000);
+    assertEquals("frozen", report.cause);
+    assertEquals(35000, report.offlineMs);
+  }
+
   @Test public void shortBlipsAreNotReported() {
     Outage outage = new Outage();
     outage.failed(1000, "x");

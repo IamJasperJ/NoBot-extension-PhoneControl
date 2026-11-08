@@ -11,6 +11,8 @@ package dev.nobot.phone;
 final class Outage {
   /** 两轮循环之间正常最长约 45 秒（退避 15 秒 + 请求超时 18 秒 + 执行指令），超过 60 秒就算被挂起 */
   static final long FROZEN_GAP = 60000;
+  /** sleep 超出预期这么久才算被冻结，普通调度抖动不会到这个量级 */
+  static final long SLEEP_SLACK = 8000;
   /** 短于 20 秒的断线（偶尔一次请求失败）不上报 */
   static final long MIN_REPORT = 20000;
 
@@ -25,6 +27,7 @@ final class Outage {
   private String cause = "";
   private String error = "";
   private long lastTick;
+  private long lastOk;
 
   /** 每轮循环开始时调用 */
   void tick(long now) {
@@ -35,8 +38,17 @@ final class Outage {
   void failed(long now, String message) {
     // 请求途中被挂起，恢复后才报错：仍算被冻结，从上一轮开始算
     if (lastTick > 0 && now - lastTick > FROZEN_GAP) begin(lastTick, "frozen");
-    begin(now, "network");
+    // 从上次成功算起：一次请求最多卡 18 秒，按失败时刻算会漏掉前面这一大段，反复卡住时永远够不上上报门槛
+    begin(lastOk > 0 ? lastOk : now, "network");
     error = message == null ? "" : message.length() > 200 ? message.substring(0, 200) : message;
+  }
+
+  /** 请求成功时调用，作为下一次网络断线的起点 */
+  void ok(long now) { lastOk = now; }
+
+  /** 轮询间隔的 sleep 明显睡过头：进程被系统冻结了一小会儿（不到 FROZEN_GAP，靠 tick 发现不了） */
+  void slept(long started, long now, long expected) {
+    if (now - started > expected + SLEEP_SLACK) begin(started, "frozen");
   }
 
   void paused(long now) { begin(now, "paused"); }

@@ -16,7 +16,7 @@
   <string name="connecting">Connecting</string>
   <string name="network_error">Connection failed; retrying</string>
   <string name="unauthorized">Authorization revoked or mismatched; pair again</string>
-  <string name="execution_timeout">Action timed out; paused. Check the phone screen.</string>
+  <string name="execution_timeout">Action timed out; continuing shortly</string>
   <string name="scan">Scan pairing code</string>
   <string name="paste">Paste pairing link</string>
   <string name="scan_hint">Point at the QR code on the web Pairing page</string>

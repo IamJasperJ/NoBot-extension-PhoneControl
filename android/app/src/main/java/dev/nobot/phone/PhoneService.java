@@ -48,6 +48,8 @@ public class PhoneService extends AccessibilityService {
   private final ExecutorService worker = Executors.newSingleThreadExecutor();
   /** 控制开启期间保持 CPU 运行，熄屏后轮询不会被系统休眠卡住。 */
   private PowerManager.WakeLock cpu;
+  /** 熄屏后 Wi-Fi 省电模式会让请求卡住甚至超时，控制开启期间保持 Wi-Fi 高性能 */
+  private android.net.wifi.WifiManager.WifiLock wifi;
   /** 我们点亮屏幕后让它保持亮着，直到空闲锁回去。 */
   private PowerManager.WakeLock screen;
   /** 屏幕是我们点亮的；只有这种情况空闲后才自动锁屏。 */
@@ -116,6 +118,9 @@ public class PhoneService extends AccessibilityService {
     PowerManager power = getSystemService(PowerManager.class);
     cpu = power.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "nobot:poll");
     cpu.setReferenceCounted(false);
+    wifi = getApplicationContext().getSystemService(android.net.wifi.WifiManager.class)
+      .createWifiLock(android.net.wifi.WifiManager.WIFI_MODE_FULL_HIGH_PERF, "nobot:poll");
+    wifi.setReferenceCounted(false);
     screen = power.newWakeLock(PowerManager.SCREEN_DIM_WAKE_LOCK, "nobot:screen");
     screen.setReferenceCounted(false);
     NotificationManager manager = getSystemService(NotificationManager.class);
@@ -217,6 +222,7 @@ public class PhoneService extends AccessibilityService {
         if (report != null) remember(report);
         // 服务端已收到（HTTP 200）才删；失败时留着下次再报
         if (!sent.isEmpty()) { inbox.ack(sent); saveInbox(); }
+        outage.ok(SystemClock.elapsedRealtime());
         prefs.edit().putLong("lastOnline", System.currentTimeMillis()).apply();
         if (enabled()) status(R.string.connected);
         failures = 0;
@@ -240,9 +246,8 @@ public class PhoneService extends AccessibilityService {
             });
             try { result = future.get(Math.max(1, Math.min(shizukuMode() ? 20000 : 10000, deadline - SystemClock.elapsedRealtime())), TimeUnit.MILLISECONDS); }
             catch (TimeoutException e) {
-              prefs.edit().putBoolean("enabled", false).apply();
               status(R.string.execution_timeout);
-              // 已派发手势可能仍会完成，暂停后不继续消费下一条指令。
+              // 结果未知，操作员会重新看屏幕；下面歇几秒让已派发的手势做完，不需要主人回来手动点开始
               result = result(false, "OUTCOME_UNKNOWN");
             }
           }
@@ -251,8 +256,13 @@ public class PhoneService extends AccessibilityService {
           pendingEpoch = epoch;
           request(base + "/result", token, device, pending);
           pending = null;
+          String code = result.optString("code");
+          if ("OUTCOME_UNKNOWN".equals(code) || "SHIZUKU_TIMEOUT".equals(code)) Thread.sleep(TIMEOUT_COOLDOWN);
         }
-        Thread.sleep(Screen.pollInterval(getSystemService(PowerManager.class).isInteractive()));
+        long interval = Screen.pollInterval(getSystemService(PowerManager.class).isInteractive());
+        long sleepStarted = SystemClock.elapsedRealtime();
+        Thread.sleep(interval);
+        outage.slept(sleepStarted, SystemClock.elapsedRealtime(), interval);
       } catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
       catch (Unauthorized e) {
         prefs.edit().putBoolean("enabled", false).apply();
@@ -377,10 +387,17 @@ public class PhoneService extends AccessibilityService {
 
   /** 每轮轮询都续期一分钟：轮询线程意外退出时锁会自己过期，不会一直耗电。 */
   private void awake(boolean on) {
-    if (on) cpu.acquire(60000);
-    else if (cpu.isHeld()) cpu.release();
+    if (on) {
+      cpu.acquire(60000);
+      if (!wifi.isHeld()) wifi.acquire();
+    } else {
+      if (cpu.isHeld()) cpu.release();
+      if (wifi.isHeld()) wifi.release();
+    }
   }
 
+  /** 指令超时后歇一会儿再领下一条，让可能还在进行的手势结束 */
+  private static final long TIMEOUT_COOLDOWN = 5000;
   private static class Unauthorized extends Exception {}
   private static class PublicHttp extends Exception {}
   private JSONObject request(String endpoint, String token, String device, JSONObject payload) throws Exception {
@@ -404,7 +421,9 @@ public class PhoneService extends AccessibilityService {
       connection.setFixedLengthStreamingMode(bytes.length);
       try (java.io.OutputStream out = connection.getOutputStream()) { out.write(bytes); }
       int code = connection.getResponseCode();
-      if (code == 401 || code == 403 || code == 404) throw new Unauthorized();
+      if (code == 401 || code == 403) throw new Unauthorized();
+      // 404 不代表授权失效：服务器重启或插件更新的那一会儿路由还没注册，按网络错误重试，否则要主人回来手动点开始
+      if (code == 404) throw new IllegalStateException("HTTP_404");
       // 过期回报已无接收者，丢弃回报后继续观察，绝不重新执行。
       if (code == 409) return new JSONObject().put("accepted", false);
       if (code != 200) throw new IllegalStateException("HTTP_FAILED");
@@ -451,7 +470,6 @@ public class PhoneService extends AccessibilityService {
         try { wake.put("action", "wake"); } catch (Exception ignored) {}
         if (future.isDone() || !enabled() || epoch != prefs.getLong("epoch", 0)) return;
         JSONObject response = control.execute(wake);
-        if ("SHIZUKU_TIMEOUT".equals(response.optString("code"))) prefs.edit().putBoolean("enabled", false).apply();
         main.post(() -> {
           if (future.isDone() || epoch != prefs.getLong("epoch", 0)) { future.complete(result(false, "CANCELLED")); return; }
           if (!response.optBoolean("ok")) { future.complete(response); return; }
@@ -549,8 +567,6 @@ public class PhoneService extends AccessibilityService {
               ? "DEVICE_LOCKED" : "UNLOCK_FAILED")); return;
           }
           JSONObject response = control.execute(command);
-          // 超时可能已经产生部分效果，必须暂停而不是继续下一条动作。
-          if ("SHIZUKU_TIMEOUT".equals(response.optString("code"))) prefs.edit().putBoolean("enabled", false).apply();
           future.complete(response);
         });
         return;

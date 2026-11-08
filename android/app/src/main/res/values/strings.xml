@@ -16,7 +16,7 @@
   <string name="connecting">正在连接</string>
   <string name="network_error">连接失败，正在重试</string>
   <string name="unauthorized">授权已撤销或配置不匹配，请重新配对</string>
-  <string name="execution_timeout">操作超时，已暂停；请检查手机画面</string>
+  <string name="execution_timeout">操作超时，稍后继续</string>
   <string name="scan">扫码配对</string>
   <string name="paste">粘贴配对链接</string>
   <string name="scan_hint">对准网页「配对管理」里的二维码</string>
